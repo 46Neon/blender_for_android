@@ -207,6 +207,26 @@ adb logcat -d -b crash | tail -40 # the crash buffer is separate and already hol
 A native crash never has to be reproduced under observation. Read `-b crash`
 first.
 
+### Debug mode: `build_files/android/debug.sh`
+
+Blender's own debug flags without a rebuild. The native glue reads launch arguments
+from `blender_args.txt` in the app's internal files directory and then in its external
+one, `/sdcard/Android/data/org.blender.blender/files`, which adb can write on any build
+(`ghost_android_read_launch_args()` in `GHOST_AndroidMain.cc`). Blender's stdout and
+stderr already reach logcat under the tag `blender`, so `--debug-*` and `--log` output
+lands there.
+
+| Command | What it does |
+| --- | --- |
+| `debug.sh status` | Device, installed version, whether the APK is debuggable, the debug flags in effect |
+| `debug.sh on <preset>` | Write a preset's flags and restart: `events`, `wm`, `gpu`, `vulkan`, `workarounds`, `python`, `depsgraph`, `log`, `all` (`debug.sh presets` lists them) |
+| `debug.sh on -- <flags>` | Any flags, e.g. `on -- --debug-wm --log wm.*` |
+| `debug.sh off` | Remove the flags and restart |
+| `debug.sh log` | Follow logcat for Blender's process only |
+| `debug.sh crash` | The last native crash from the crash buffer, with its backtrace |
+| `debug.sh report [note]` | A `.tar.gz` under `$BUILD_BASE/debug_reports`: logcat (all, Blender, crash), meminfo, gfxinfo, `dumpsys input` (held keys and stuck modifiers), IME state, focus, a screenshot, the flags and the commit |
+| `debug.sh build` | `build.py full --debuggable`: `run-as` and a native debugger work. Never for a release |
+
 For temporary native logging, log directly rather than through Blender's CLOG,
 which cannot be enabled without a command line:
 
@@ -284,6 +304,13 @@ Anything built, fixed or taken back out belongs here before it is committed. See
 | Stylus pressure reaches 100% with a comfortable press. Android normalises pressure against the range the digitiser declares, and an S Pen tops out around 0.77 | [DNA_userdef_types.h](source/blender/makesdna/DNA_userdef_types.h), [versioning_userdef.cc](source/blender/blenloader/intern/versioning_userdef.cc), [rna_userdef.cc](source/blender/makesrna/intern/rna_userdef.cc) |
 | Typing with the platform keyboard. A soft keyboard sends composing text, not key events, so the composition is mirrored into the field | [BlenderActivity.java](build_files/android/apk/app/src/main/java/org/blender/blender/BlenderActivity.java) |
 | The interface rotates with the device | [GHOST_AndroidMain.cc](intern/ghost/intern/GHOST_AndroidMain.cc), [GHOST_SystemAndroid.cc](intern/ghost/intern/GHOST_SystemAndroid.cc), [AndroidManifest.xml](build_files/android/apk/app/src/main/AndroidManifest.xml) |
+| A hardware or Bluetooth keyboard types. The native input queue returns 0 for every key so the event reaches `BlenderActivity.dispatchKeyEvent()` (and `InputView.onKeyPreIme()` while the IME is bound), which forwards it with the character `KeyCharacterMap` resolves: dead keys compose (ABNT2), AltGr types, Ctrl/Super/left Alt make shortcuts. Native and Java share the `nativeOnKey(keycode, action, meta, unicode, repeat)` contract, so ship them together | [BlenderActivity.java](build_files/android/apk/app/src/main/java/org/blender/blender/BlenderActivity.java) `forwardHardwareKey()`, [GHOST_SystemAndroid.cc](intern/ghost/intern/GHOST_SystemAndroid.cc) `handleKeyEvent()`, `dispatchJavaKeyEvent()` |
+| The platform keyboard stays down while an external alphabetic keyboard is connected, re-checked by an `InputDeviceListener` when one is paired or switched off mid-edit | [BlenderActivity.java](build_files/android/apk/app/src/main/java/org/blender/blender/BlenderActivity.java) `updateSoftKeyboard()` |
+| A quick three-finger tap sends Ctrl+Space (toggle maximized area) at the fingers' centroid. The three-finger pan now waits for `GESTURE_DECIDE_PX` of travel before it starts, which is what tells the two apart | [GHOST_SystemAndroid.cc](intern/ghost/intern/GHOST_SystemAndroid.cc) `touchSendFullArea()`, `TOUCH_THREE_TAP_MS` |
+| The modifier wheel: floating Ctrl/Shift/Alt (latched), Quick Favorites, and Enter/Esc while the status bar shows them for a modal operator. Ported from the official `android-demo` branch and rebuilt on this backend's pointer events, asked before the on-screen keyboard in `ghost_event_proc()`. Its modifiers are the window's own event state, which the on-screen keyboard now reads too (`vk.mods` is refreshed from it), so the two always agree. `GHOST_TButton` is an index, not a mask -- treating it as one left the wheel holding every press | [wm_modifier_wheel.cc](source/blender/windowmanager/intern/wm_modifier_wheel.cc), [wm_virtual_keyboard.cc](source/blender/windowmanager/intern/wm_virtual_keyboard.cc), [interface_template_status.cc](source/blender/editors/interface/templates/interface_template_status.cc), `popup_menu_invoke(..., anchor_xy)` in [interface_region_menu_popup.cc](source/blender/editors/interface/regions/interface_region_menu_popup.cc) |
+| Side panels resize with a finger. The region edge action zone is widened for touch (into the panel by at most a fifth of its width, out of it only when it does not overlap), a press on it goes to the screen keymap before the region under it, and `screen.actionzone`'s poll also accepts the press position -- a finger's drag arrives all at once, so the event state is already past the edge when the press is handled | [area.cc](source/blender/editors/screen/area.cc) `region_azone_edge()`, [wm_event_system.cc](source/blender/windowmanager/intern/wm_event_system.cc) `ED_area_region_edge_at_xy()`, [screen_ops.cc](source/blender/editors/screen/screen_ops.cc) `actionzone_area_poll()` |
+| Tree view lists scroll with a finger: in a touch-scroll region a drag on a row pans instead of starting a drag and drop (a stylus still drags), and `ui.view_item_select` acts on CLICK. The Asset Browser's catalog list opens at no more than 40% of the editor's width the first time | [interface_handlers.cc](source/blender/editors/interface/interface_handlers.cc) `do_but_VIEW_ITEM()`, [blender_default.py](scripts/presets/keyconfig/keymap_data/blender_default.py), [area.cc](source/blender/editors/screen/area.cc) `region_rect_recursive()` |
+| Folders open with one tap in the File Browser: "Open Folders on Single Click" defaults on when `sys.platform == "android"`, and `file.select` acts on CLICK so a drag that starts on a folder scrolls instead of opening it. A double tap had to land twice within a few pixels | [Blender.py](scripts/presets/keyconfig/Blender.py) `use_file_single_click`, [blender_default.py](scripts/presets/keyconfig/keymap_data/blender_default.py) `km_file_browser_main()` |
 
 ## The on-screen keyboard
 
@@ -446,6 +473,7 @@ first. The general form: a scale applies to a scope, so check what else is in th
 | pip | [deps/build.sh](build_files/android/deps/build.sh) |
 | Remote asset libraries, including Online Essentials, are switched **off**. They cannot work: the listing downloader is built on `multiprocessing` with the 'spawn' start method, and `_multiprocessing` is not in this Python -- CPython refuses to build it without `sem_open`, which Bionic does not have (`ac_cv_func_sem_open=no`, `MODULE__MULTIPROCESSING_STATE=missing` in the CPython build). Even built it would fail at run time for the same reason, and 'spawn' re-runs `sys.executable`, which does not exist when Blender is a library inside a NativeActivity. Left alone the failure surfaced three steps from its cause, as "file does not exist: `_asset-library-meta.json`", because the C++ caller still carries a "TODO: report errors in the UI somehow". This is separate from the extension system, which does its own networking and works | [AS_remote_library.hh](source/blender/asset_system/AS_remote_library.hh) `remote_libraries_supported()`, [remote_library.cc](source/blender/asset_system/intern/library_types/remote_library.cc), [asset_library.cc](source/blender/asset_system/intern/asset_library.cc), [asset_library_service.cc](source/blender/asset_system/intern/asset_library_service.cc), [userpref_asset_libraries_list.cc](source/blender/editors/space_userpref/userpref_asset_libraries_list.cc), [bl_pkg/__init__.py](scripts/addons_core/bl_pkg/__init__.py) `remote_asset_library_sync()` |
 | Essentials assets, 49 translations, USD plugins | [package.sh](build_files/android/apk/package.sh), [GHOST_SystemPathsAndroid.cc](intern/ghost/intern/GHOST_SystemPathsAndroid.cc) |
+| Remote asset libraries, Online Essentials included -- where the default geometry, materials and node groups come from; the bundled `assets/` holds only brushes and node groups, the same in 5.2 and 5.3. The downloader runs on a thread on Android (`_ThreadContext`: no `_multiprocessing`, nothing to spawn), and requests, urllib3, idna, charset_normalizer, attrs and cattrs are bundled as pure-Python wheels. Downloads only with Online Access allowed | [downloader.py](scripts/modules/_bpy_internal/http/downloader.py), [AS_remote_library.hh](source/blender/asset_system/AS_remote_library.hh) `remote_libraries_supported()`, [deps/build.sh](build_files/android/deps/build.sh) `build_remote_asset_python_deps` |
 
 ## Opening files from the system
 
@@ -515,6 +543,7 @@ reproduce each failure from the shell.
 | [ANDROID_WHATS_NEW.md](ANDROID_WHATS_NEW.md) | The same in plain language, one row per change |
 | [ANDROID_BUILD_GUIDE.md](ANDROID_BUILD_GUIDE.md) | The long form build walkthrough, step by step |
 | [build_files/android/BUILDING.md](build_files/android/BUILDING.md) | Building from scratch, including the manual steps `build.py` wraps |
+| [ANDROID_UPSTREAM.md](ANDROID_UPSTREAM.md) | Which upstream Blender this tracks, how the anchor was found, how the 5.3 beta sync was merged and its conflicts resolved, and how to do the next one |
 | [ANDROID_MISSING_FEATURES.md](ANDROID_MISSING_FEATURES.md) | What is still missing, audited against the real build |
 | [ANDROID_VIRTUAL_KEYBOARD_STUDY.md](ANDROID_VIRTUAL_KEYBOARD_STUDY.md) | Why the on-screen keyboard is native, and the event path it relies on |
 | [ANDROID_TOUCH_UI_SCALE_STUDY.md](ANDROID_TOUCH_UI_SCALE_STUDY.md) | How only the menus are scaled for a thumb, how the top bar folds into one button, and how a finger scrolls a menu taller than the screen. All built |

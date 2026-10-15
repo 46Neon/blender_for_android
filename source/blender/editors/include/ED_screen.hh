@@ -25,6 +25,7 @@ namespace blender {
 
 struct ARegion;
 struct AZone;
+enum AZEdge : int;
 struct Depsgraph;
 struct IDProperty;
 struct Main;
@@ -37,6 +38,7 @@ struct bContext;
 struct bScreen;
 struct rcti;
 struct wmKeyConfig;
+struct wmKeyMap;
 struct wmMsgSubscribeKey;
 struct wmMsgSubscribeValue;
 struct wmNotifier;
@@ -80,6 +82,14 @@ void ED_region_tag_redraw_partial(ARegion *region, const rcti *rct, bool rebuild
 void ED_region_tag_redraw_cursor(ARegion *region);
 void ED_region_tag_redraw_no_rebuild(ARegion *region);
 void ED_region_tag_refresh_ui(ARegion *region);
+/**
+ * Attempt to activate an button referencing an RNA property in the \a region, it may redraw the
+ * region so it can try one more time.
+ */
+void ED_region_activate_rna_prop(bContext *C,
+                                 ARegion *region,
+                                 const void *data,
+                                 StringRefNull prop_name);
 /**
  * Tag editor overlays to be redrawn. If in doubt about which parts need to be redrawn (partial
  * clipping rectangle set), redraw everything.
@@ -182,6 +192,12 @@ void ED_region_info_draw_multiline(ARegion *region,
 void ED_region_image_metadata_panel_draw(ImBuf *ibuf, ui::Layout *layout);
 void ED_region_grid_draw(ARegion *region, float zoomx, float zoomy, float x0, float y0);
 float ED_region_blend_alpha(ARegion *region);
+/**
+ * The region's on-screen rectangle, accounting for its current blend animation slide offset (see
+ * #ED_region_blend_alpha). Equal to `region->winrct` when the region isn't currently blending
+ * in/out.
+ */
+void ED_region_blend_rect(ARegion *region, rcti *r_rect);
 const rcti *ED_region_visible_rect(ARegion *region);
 /**
  * Overlapping regions only in the following restricted cases.
@@ -379,12 +395,12 @@ ScrArea *ED_screen_areas_iter_next(const bScreen *screen, const ScrArea *area);
   for (ScrArea *area_name = ED_screen_areas_iter_first(win, screen); area_name != NULL; \
        area_name = ED_screen_areas_iter_next(screen, area_name))
 #define ED_screen_verts_iter(win, screen, vert_name) \
-  for (ScrVert *vert_name = (win)->global_areas.vertbase.first ? \
-                                (ScrVert *)(win)->global_areas.vertbase.first : \
-                                (ScrVert *)(screen)->vertbase.first; \
+  for (ScrVert *vert_name = (win)->global_areas.vertbase.first_ ? \
+                                (ScrVert *)(win)->global_areas.vertbase.first_ : \
+                                (ScrVert *)(screen)->vertbase.first_; \
        vert_name != NULL; \
-       vert_name = (vert_name == (win)->global_areas.vertbase.last) ? \
-                       (ScrVert *)(screen)->vertbase.first : \
+       vert_name = (vert_name == (win)->global_areas.vertbase.last()) ? \
+                       (ScrVert *)(screen)->vertbase.first_ : \
                        vert_name->next)
 
 /**
@@ -402,6 +418,12 @@ void ED_screens_init(bContext *C, Main *bmain, wmWindowManager *wm);
  * Only for edge lines between areas.
  */
 void ED_screen_draw_edges(wmWindow *win);
+/**
+ * Whether `xy` is on the action zone that resizes or reveals one of the area's regions. The
+ * Android touch path gives such a press to the screen keymap before the region under it.
+ */
+bool ED_area_region_edge_at_xy(ScrArea *area, const int xy[2]);
+
 /**
  * Move a press that landed near an editor border onto it, for input that cannot be precise.
  *
@@ -615,6 +637,16 @@ class WorkspaceStatus {
    *   [V] X-Ray
    */
   void opmodal(std::string text, const wmOperatorType *ot, int propvalue, bool inverted = false);
+
+  /**
+   * Add a dynamic status entry for a given property in a modal keymap.
+   * Example:
+   *   [V] X-Ray
+   */
+  void modal_keymap(std::string text,
+                    const wmKeyMap &keymap,
+                    int propvalue,
+                    bool inverted = false);
 };
 
 void ED_workspace_do_listen(bContext *C, const wmNotifier *note);

@@ -51,6 +51,9 @@ static constexpr int32_t TOUCH_LONG_PRESS_MOVE_PX = 16;
  * the first frames of a two-finger touch always carry some of both, and acting
  * on them is what made every attempt to scroll a panel zoom it instead. */
 static constexpr float GESTURE_DECIDE_PX = 24.0f;
+/* Three fingers lifted within this long of the third one landing, without travelling
+ * GESTURE_DECIDE_PX, are a tap rather than the start of a pan. */
+static constexpr uint64_t TOUCH_THREE_TAP_MS = 300;
 
 GHOST_SystemAndroid::GHOST_SystemAndroid()
     : app_(g_android_app),
@@ -69,6 +72,10 @@ GHOST_SystemAndroid::GHOST_SystemAndroid()
       gesture_kind_(GestureKind::Undecided),
       touch_pan_active_(false),
       touch_shift_active_(false),
+      touch_three_pending_(false),
+      touch_three_time_(0),
+      touch_three_x_(0),
+      touch_three_y_(0),
       touch_pending_(false),
       touch_button_down_(false),
       touch_button_(GHOST_kButtonMaskLeft),
@@ -367,9 +374,16 @@ int32_t GHOST_SystemAndroid::handleMotionEvent(AInputEvent *event)
     return 1;
   }
 
-  /* Three-finger drag: "Move the view" (Shift + middle mouse). Two fingers already orbit, so the
-   * third finger is what buys the viewport a dedicated pan. Finish immediately when one of the
-   * three fingers is lifted so a following two-finger gesture starts with clean state. */
+  /* Three fingers: a drag is "Move the view" (Shift + middle mouse), a tap is "Toggle Maximize
+   * Area" (Ctrl + Space). Two fingers already orbit, so the third finger is what buys the viewport
+   * a dedicated pan, and a quick tap with it the shortcut a hand on a touch screen cannot reach.
+   *
+   * Which of the two it is stays open until the fingers either travel GESTURE_DECIDE_PX (a pan) or
+   * lift within TOUCH_THREE_TAP_MS without doing so (a tap). The pan used to start the moment the
+   * third finger landed, which made a tap an empty Shift + middle click instead.
+   *
+   * Finish immediately when one of the three fingers is lifted so a following two-finger gesture
+   * starts with clean state. */
   if (count >= 3) {
     if (!touch_pan_active_) {
       touchCancelPending();
@@ -389,19 +403,48 @@ int32_t GHOST_SystemAndroid::handleMotionEvent(AInputEvent *event)
     if (action == AMOTION_EVENT_ACTION_POINTER_UP || action == AMOTION_EVENT_ACTION_UP ||
         action == AMOTION_EVENT_ACTION_CANCEL)
     {
+      if (touch_three_pending_ && action != AMOTION_EVENT_ACTION_CANCEL &&
+          getMilliSeconds() - touch_three_time_ <= TOUCH_THREE_TAP_MS)
+      {
+        touchSendFullArea();
+      }
+      touch_three_pending_ = false;
       touchEndPan();
     }
     else if (!touch_pan_active_) {
-      /* Shift goes down before the button: a keymap item is matched against the modifiers the
-       * press itself carries, so pressing it afterwards would still select the orbit binding. */
-      touchSendShift(true);
-      touchSendButton(GHOST_kButtonMaskMiddle, GHOST_kEventButtonDown);
-      touch_pan_active_ = true;
+      if (!touch_three_pending_) {
+        touch_three_pending_ = true;
+        touch_three_time_ = getMilliSeconds();
+        touch_three_x_ = x;
+        touch_three_y_ = y;
+      }
+      else if (std::hypot(float(x - touch_three_x_), float(y - touch_three_y_)) >=
+               GESTURE_DECIDE_PX)
+      {
+        touch_three_pending_ = false;
+        /* Press where the fingers landed, for the same reason the one-finger drag does: the
+         * press position is what the operator measures the drag from. */
+        pushEvent(std::make_unique<GHOST_EventCursor>(getMilliSeconds(),
+                                                      GHOST_kEventCursorMove,
+                                                      window_,
+                                                      touch_three_x_,
+                                                      touch_three_y_,
+                                                      GHOST_TABLET_DATA_NONE));
+        /* Shift goes down before the button: a keymap item is matched against the modifiers
+         * the press itself carries, so pressing it afterwards would still select the orbit
+         * binding. */
+        touchSendShift(true);
+        touchSendButton(GHOST_kButtonMaskMiddle, GHOST_kEventButtonDown);
+        touch_pan_active_ = true;
+        pushEvent(std::make_unique<GHOST_EventCursor>(
+            getMilliSeconds(), GHOST_kEventCursorMove, window_, x, y, GHOST_TABLET_DATA_NONE));
+      }
     }
     gesture_active_ = false;
     return 1;
   }
 
+  touch_three_pending_ = false;
   touchEndPan();
 
   /* Two fingers: either a pan or a zoom, decided once and then held for the
@@ -612,6 +655,25 @@ void GHOST_SystemAndroid::touchSendShift(bool down)
                                              false));
 }
 
+void GHOST_SystemAndroid::touchSendFullArea()
+{
+  /* As a key press rather than a call to the operator, so whatever the keymap binds to Ctrl+Space
+   * is what runs -- and, like the shortcut, it acts on the area under the cursor, which the caller
+   * has just put at the fingers. Ctrl is mirrored into meta_state_ for the reason touchSendShift
+   * gives. */
+  const uint64_t time = getMilliSeconds();
+  meta_state_ |= AMETA_CTRL_ON | AMETA_CTRL_LEFT_ON;
+  pushEvent(std::make_unique<GHOST_EventKey>(
+      time, GHOST_kEventKeyDown, window_, GHOST_kKeyLeftControl, false));
+  pushEvent(
+      std::make_unique<GHOST_EventKey>(time, GHOST_kEventKeyDown, window_, GHOST_kKeySpace, false));
+  pushEvent(
+      std::make_unique<GHOST_EventKey>(time, GHOST_kEventKeyUp, window_, GHOST_kKeySpace, false));
+  meta_state_ &= ~(AMETA_CTRL_ON | AMETA_CTRL_LEFT_ON);
+  pushEvent(std::make_unique<GHOST_EventKey>(
+      time, GHOST_kEventKeyUp, window_, GHOST_kKeyLeftControl, false));
+}
+
 void GHOST_SystemAndroid::touchEndPan()
 {
   if (!touch_pan_active_) {
@@ -677,11 +739,19 @@ static GHOST_TKey convertAndroidKey(int32_t keycode)
   if (keycode >= AKEYCODE_0 && keycode <= AKEYCODE_9) {
     return GHOST_TKey(GHOST_kKey0 + (keycode - AKEYCODE_0));
   }
+  if (keycode >= AKEYCODE_F1 && keycode <= AKEYCODE_F12) {
+    return GHOST_TKey(GHOST_kKeyF1 + (keycode - AKEYCODE_F1));
+  }
+  if (keycode >= AKEYCODE_NUMPAD_0 && keycode <= AKEYCODE_NUMPAD_9) {
+    return GHOST_TKey(GHOST_kKeyNumpad0 + (keycode - AKEYCODE_NUMPAD_0));
+  }
   switch (keycode) {
     case AKEYCODE_SPACE:
       return GHOST_kKeySpace;
     case AKEYCODE_ENTER:
       return GHOST_kKeyEnter;
+    case AKEYCODE_NUMPAD_ENTER:
+      return GHOST_kKeyNumpadEnter;
     case AKEYCODE_DEL:
       return GHOST_kKeyBackSpace;
     case AKEYCODE_FORWARD_DEL:
@@ -699,23 +769,122 @@ static GHOST_TKey convertAndroidKey(int32_t keycode)
       return GHOST_kKeyUpArrow;
     case AKEYCODE_DPAD_DOWN:
       return GHOST_kKeyDownArrow;
+
+    case AKEYCODE_MOVE_HOME:
+      return GHOST_kKeyHome;
+    case AKEYCODE_MOVE_END:
+      return GHOST_kKeyEnd;
+    case AKEYCODE_PAGE_UP:
+      return GHOST_kKeyUpPage;
+    case AKEYCODE_PAGE_DOWN:
+      return GHOST_kKeyDownPage;
+    case AKEYCODE_INSERT:
+      return GHOST_kKeyInsert;
+    case AKEYCODE_CAPS_LOCK:
+      return GHOST_kKeyCapsLock;
+    case AKEYCODE_NUM_LOCK:
+      return GHOST_kKeyNumLock;
+    case AKEYCODE_SCROLL_LOCK:
+      return GHOST_kKeyScrollLock;
+    case AKEYCODE_SYSRQ:
+      return GHOST_kKeyPrintScreen;
+    case AKEYCODE_BREAK:
+      return GHOST_kKeyPause;
+
+    /* Modifiers: they must arrive as events of their own, because the window manager builds the
+     * modifier state of every following key (Ctrl+S, Shift+A) from their press and release. */
+    case AKEYCODE_SHIFT_LEFT:
+      return GHOST_kKeyLeftShift;
+    case AKEYCODE_SHIFT_RIGHT:
+      return GHOST_kKeyRightShift;
+    case AKEYCODE_CTRL_LEFT:
+      return GHOST_kKeyLeftControl;
+    case AKEYCODE_CTRL_RIGHT:
+      return GHOST_kKeyRightControl;
+    case AKEYCODE_ALT_LEFT:
+      return GHOST_kKeyLeftAlt;
+    case AKEYCODE_ALT_RIGHT:
+      return GHOST_kKeyRightAlt;
+    case AKEYCODE_META_LEFT:
+      return GHOST_kKeyLeftOS;
+    case AKEYCODE_META_RIGHT:
+      return GHOST_kKeyRightOS;
+
+    /* Punctuation. These are physical positions, so they do not depend on the layout. */
+    case AKEYCODE_COMMA:
+      return GHOST_kKeyComma;
+    case AKEYCODE_PERIOD:
+      return GHOST_kKeyPeriod;
+    case AKEYCODE_MINUS:
+      return GHOST_kKeyMinus;
+    case AKEYCODE_EQUALS:
+      return GHOST_kKeyEqual;
+    case AKEYCODE_PLUS:
+      return GHOST_kKeyPlus;
+    case AKEYCODE_LEFT_BRACKET:
+      return GHOST_kKeyLeftBracket;
+    case AKEYCODE_RIGHT_BRACKET:
+      return GHOST_kKeyRightBracket;
+    case AKEYCODE_BACKSLASH:
+      return GHOST_kKeyBackslash;
+    case AKEYCODE_SEMICOLON:
+      return GHOST_kKeySemicolon;
+    case AKEYCODE_APOSTROPHE:
+      return GHOST_kKeyQuote;
+    case AKEYCODE_SLASH:
+      return GHOST_kKeySlash;
+    case AKEYCODE_GRAVE:
+      return GHOST_kKeyAccentGrave;
+
+    case AKEYCODE_NUMPAD_DOT:
+      return GHOST_kKeyNumpadPeriod;
+    case AKEYCODE_NUMPAD_ADD:
+      return GHOST_kKeyNumpadPlus;
+    case AKEYCODE_NUMPAD_SUBTRACT:
+      return GHOST_kKeyNumpadMinus;
+    case AKEYCODE_NUMPAD_MULTIPLY:
+      return GHOST_kKeyNumpadAsterisk;
+    case AKEYCODE_NUMPAD_DIVIDE:
+      return GHOST_kKeyNumpadSlash;
     default:
       return GHOST_kKeyUnknown;
   }
 }
 
+/* Append the UTF-8 encoding of \a code_point to \a buf (at least 5 bytes, zeroed). */
+static void utf8_encode(uint32_t code_point, char *buf)
+{
+  if (code_point < 0x80) {
+    buf[0] = char(code_point);
+  }
+  else if (code_point < 0x800) {
+    buf[0] = char(0xC0 | (code_point >> 6));
+    buf[1] = char(0x80 | (code_point & 0x3F));
+  }
+  else if (code_point < 0x10000) {
+    buf[0] = char(0xE0 | (code_point >> 12));
+    buf[1] = char(0x80 | ((code_point >> 6) & 0x3F));
+    buf[2] = char(0x80 | (code_point & 0x3F));
+  }
+  else {
+    buf[0] = char(0xF0 | (code_point >> 18));
+    buf[1] = char(0x80 | ((code_point >> 12) & 0x3F));
+    buf[2] = char(0x80 | ((code_point >> 6) & 0x3F));
+    buf[3] = char(0x80 | (code_point & 0x3F));
+  }
+}
+
 int32_t GHOST_SystemAndroid::handleKeyEvent(AInputEvent *event)
 {
+  /* Deliberately not handled here. The NDK cannot say which character a key produces under
+   * the user's layout (and a Brazilian ABNT2 keyboard has dead keys), so a key event built from
+   * the key code alone has no `utf8_buf`: Space, Backspace and Enter still worked, but nothing
+   * could be typed into a field. Returning 0 lets the event continue down the view hierarchy to
+   * BlenderActivity.dispatchKeyEvent(), which forwards it with the character resolved by
+   * KeyCharacterMap (see handleJavaKeyEvent). Having every key take that one route also keeps
+   * them in order. */
   meta_state_ = AKeyEvent_getMetaState(event);
-  const GHOST_TKey key = convertAndroidKey(AKeyEvent_getKeyCode(event));
-  if (key == GHOST_kKeyUnknown) {
-    return 0;
-  }
-  const bool down = AKeyEvent_getAction(event) == AKEY_EVENT_ACTION_DOWN;
-  const bool repeat = AKeyEvent_getRepeatCount(event) > 0;
-  pushEvent(std::make_unique<GHOST_EventKey>(
-      getMilliSeconds(), down ? GHOST_kEventKeyDown : GHOST_kEventKeyUp, window_, key, repeat));
-  return 1;
+  return 0;
 }
 
 /* Byte length of the UTF-8 character starting at a lead byte. */
@@ -745,10 +914,11 @@ void GHOST_SystemAndroid::handleTextInput(const char *utf8_string)
   java_text_.push_back(utf8_string);
 }
 
-void GHOST_SystemAndroid::handleJavaKeyEvent(int32_t keycode, int32_t action, int32_t meta_state)
+void GHOST_SystemAndroid::handleJavaKeyEvent(
+    int32_t keycode, int32_t action, int32_t meta_state, int32_t unicode, bool repeat)
 {
   std::scoped_lock lock(java_input_mutex_);
-  java_keys_.push_back({keycode, action, meta_state});
+  java_keys_.push_back({keycode, action, meta_state, unicode, repeat});
 }
 
 void GHOST_SystemAndroid::handleOpenMainFile(const char *path)
@@ -778,7 +948,7 @@ void GHOST_SystemAndroid::drainJavaInput()
     dispatchTextInput(string.c_str());
   }
   for (const JavaKeyEvent &key : keys) {
-    dispatchJavaKeyEvent(key.keycode, key.action, key.meta_state);
+    dispatchJavaKeyEvent(key.keycode, key.action, key.meta_state, key.unicode, key.repeat);
   }
   for (const std::string &path : open_files) {
     /* The handler in `wm_window.cc` drops any event without a valid window; before
@@ -829,7 +999,8 @@ void GHOST_SystemAndroid::dispatchTextInput(const char *utf8_string)
   }
 }
 
-void GHOST_SystemAndroid::dispatchJavaKeyEvent(int32_t keycode, int32_t action, int32_t meta_state)
+void GHOST_SystemAndroid::dispatchJavaKeyEvent(
+    int32_t keycode, int32_t action, int32_t meta_state, int32_t unicode, bool repeat)
 {
   if (!window_) {
     return;
@@ -840,8 +1011,16 @@ void GHOST_SystemAndroid::dispatchJavaKeyEvent(int32_t keycode, int32_t action, 
     return;
   }
   const bool down = action == AKEY_EVENT_ACTION_DOWN;
+  if (down && unicode >= 32 && unicode != 127) {
+    /* Text fields insert `utf8_buf`; a key without it is only a shortcut. */
+    char buf[6] = {0};
+    utf8_encode(uint32_t(unicode), buf);
+    pushEvent(std::make_unique<GHOST_EventKey>(
+        getMilliSeconds(), GHOST_kEventKeyDown, window_, key, repeat, buf));
+    return;
+  }
   pushEvent(std::make_unique<GHOST_EventKey>(
-      getMilliSeconds(), down ? GHOST_kEventKeyDown : GHOST_kEventKeyUp, window_, key, false));
+      getMilliSeconds(), down ? GHOST_kEventKeyDown : GHOST_kEventKeyUp, window_, key, repeat));
 }
 
 GHOST_TSuccess GHOST_SystemAndroid::getModifierKeys(GHOST_ModifierKeys &keys) const

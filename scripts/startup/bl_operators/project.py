@@ -11,6 +11,8 @@ import os
 import logging
 from dataclasses import dataclass
 
+from enum import Enum
+
 import bpy
 from bpy.types import Operator
 from bpy.app.translations import (
@@ -22,33 +24,9 @@ logger = logging.getLogger(__name__)
 
 # Directory and file name where the project is read/written to disk.
 PROJECT_DIR = ".blender_project"
-PROJECT_CONFIG = "project.toml"
 
 PROJECT_DEFAULT_NAME = "Untitled Project"
-
-
-# -------------------------------------------------------------
-# TOML Schema
-#
-# Types that define the schema for reading/writing project config TOML files.
-
-@dataclass
-class ProjectConfig:
-    name: str
-
-    @staticmethod
-    def new_from_project(project):
-        """Create a ProjectConfig object from an existing real project."""
-        return ProjectConfig(name=project.name)
-
-    def populate_project(self, project):
-        """Fills in an existing real project's data from this ProjectConfig object."""
-
-        # Currently we don't do anything, because the project name is handled
-        # separately. But when projects have more than just a name, all of that
-        # other data should be handled here, and be symmetric with
-        # `new_from_project()` above.
-        pass
+ASSET_LIBRARY_DEFAULT_NAME = "Untitled Asset Library"
 
 
 # -------------------------------------------------------------
@@ -67,106 +45,12 @@ class ProjectLoadException(Exception):
 
 # -------------------------------------------------------------
 # Internal Utilities
-
-def save_project(project, report=None):
-    """
-    Save the passed project to disk.
-
-    Throws a ProjectSaveException in any of the following cases:
-
-    - There is no project to save.
-    - The project's root path is relative or doesn't exist.
-    - The project can't be written due to any of a number of file-system
-      issues (directory isn't writable, etc.).
-
-    Optionally takes an `Operator.report` for reporting errors to the user.
-    """
-
-    import cattrs
-    import tomli_w
-    from pathlib import Path
-
-    if project is None:
-        if report:
-            report({'ERROR'}, "Cannot save project because there is no project to save.")
-        raise ProjectSaveException
-
-    logger.info("Saving project '{:s}' at '{:s}'...".format(project.name, project.root_path))
-
-    # Get and validate the root path.
-    root_path = Path(project.root_path)
-    try:
-        if not root_path.is_absolute():
-            if report:
-                report({'ERROR'}, "Cannot write project to non-absolute path.")
-            raise ProjectSaveException
-
-        if not root_path.is_dir():
-            if report:
-                report({'ERROR'}, "Cannot save project: root directory does not exist.")
-            raise ProjectSaveException
-    except PermissionError:
-        if report:
-            report({'ERROR'}, rpt_("Cannot access '{:s}' due to file-system permissions.").format(PROJECT_DIR))
-        raise ProjectSaveException
-    except Exception as e:
-        if report:
-            report({'ERROR'}, str(e))
-        raise ProjectSaveException
-
-    config_dir_path = root_path.joinpath(PROJECT_DIR)
-
-    # Ensure the project config directory exists.
-    try:
-        config_dir_path.mkdir(parents=True, exist_ok=True)
-    except FileExistsError:
-        if report:
-            report(
-                {'ERROR'},
-                rpt_("A file named '{:s}' already exists, but it needs to be a directory.").format(PROJECT_DIR),
-            )
-        raise ProjectSaveException
-    except PermissionError:
-        if report:
-            report(
-                {'ERROR'},
-                rpt_("Cannot create '{:s}' directory due to file-system permissions.").format(PROJECT_DIR),
-            )
-        raise ProjectSaveException
-    except Exception as e:
-        if report:
-            report({'ERROR'}, str(e))
-        raise ProjectSaveException
-
-    # Create a project config dict from the current project.
-    converter = cattrs.Converter()
-    config = ProjectConfig.new_from_project(project)
-    config_dict = converter.unstructure(config, ProjectConfig)
-
-    # Write the config TOML file.
-    config_path = root_path.joinpath(PROJECT_DIR, PROJECT_CONFIG)
-    try:
-        with config_path.open(mode='wb') as f:
-            tomli_w.dump(config_dict, f)
-    except PermissionError:
-        if report:
-            report({'ERROR'}, rpt_("Cannot write to '{:s}' due to file-system permissions.").format(PROJECT_CONFIG))
-        raise ProjectSaveException
-    except Exception as e:
-        if report:
-            report({'ERROR'}, str(e))
-        raise ProjectSaveException
-
-    project.is_dirty = False
-
-    logger.info("...done.")
-
-
 def find_and_load_project_for_blend_path(context, blend_path, report=None):
     """
     Load the project the blend file is in, or clears the project if none is found.
 
-    `blend_path` should be an absolute path.
+    `blend_path` should be an absolute path. An empty path is a new file,
+    which keeps the active project.
 
     Throws a ProjectLoadException if a project is found but is invalid
     (missing config file, config validation error, etc.).
@@ -177,8 +61,6 @@ def find_and_load_project_for_blend_path(context, blend_path, report=None):
     from pathlib import Path
 
     if blend_path == "":
-        # Not an on-disk blend file, so there is no project to load.
-        bpy.data.project_clear()
         return
 
     # Note: `blend_path` (and consequently the resulting `root_path`) are
@@ -197,10 +79,10 @@ def find_and_load_project_for_blend_path(context, blend_path, report=None):
     bpy.data.project_clear()
 
     # Load project.
-    config = read_project_toml_config(root_path, report)
-    bpy.data.project_init(config.name, str(root_path))
-    config.populate_project(bpy.data.project)
-    bpy.data.project.is_dirty = False
+    try:
+        bpy.data.project_init_from_root_path(str(root_path))
+    except RuntimeError:
+        raise ProjectLoadException
 
 
 def find_project_root_from_blend_file_path(blend_path):
@@ -216,78 +98,15 @@ def find_project_root_from_blend_file_path(blend_path):
     return None
 
 
-def read_project_toml_config(root_path, report=None):
+def blend_file_is_has_project_root(blend_file_path):
     """
-    Read the project config for the given project root path.
+    Return whether the blend file has a project root.
 
-    Throws a ProjectLoadException if no config is found, if the config is
-    not readable due to file-system permissions, or if it's not a valid
-    project config (e.g. contains invalid TOML or doesn't match the schema).
-
-    Optionally takes an `Operator.report` for reporting errors to the user.
-
-    Returns the configuration (`ProjectConfig`).
-    """
-    import tomllib
-    import cattrs
-
-    config_path = root_path.joinpath(PROJECT_DIR, PROJECT_CONFIG)
-    try:
-        with open(config_path, "rb") as f:
-            config_dict = tomllib.load(f)
-    except FileNotFoundError:
-        if report:
-            report({'ERROR'}, rpt_("Project has no {:s} file.").format(PROJECT_CONFIG))
-        raise ProjectLoadException
-    except PermissionError:
-        if report:
-            report({'ERROR'}, rpt_("Cannot access {:s} file due to file-system permissions.").format(PROJECT_CONFIG))
-        raise ProjectLoadException
-    except tomllib.TOMLDecodeError as e:
-        if report:
-            report({'ERROR'}, rpt_("Project's {:s} file contains invalid TOML: {:s}").format(PROJECT_CONFIG, str(e)))
-        raise ProjectLoadException
-    except Exception as e:
-        if report:
-            report({'ERROR'}, str(e))
-        raise ProjectLoadException
-
-    # Validate schema and convert to ProjectConfig class.
-    converter = cattrs.Converter()
-    try:
-        project_config = converter.structure(config_dict, ProjectConfig)
-    except cattrs.BaseValidationError as e:
-        if report:
-            report({'ERROR'}, rpt_("Invalid project configuration file: {:s}").format(str(e)))
-        raise ProjectLoadException
-
-    # Other validation not handled by the schema.
-    if project_config.name == "":
-        if report:
-            report({'ERROR'}, "Invalid project: project name is empty.")
-        raise ProjectLoadException
-
-    return project_config
-
-
-def blend_file_is_in_valid_project(blend_file_path):
-    """
-    Return whether the blend file is inside a valid project or not.
-
-    True if the blend file is inside a valid project, false if no project is
-    found or if the project is invalid.
-
-    An "invalid project" is one whose TOML config is non-existent or doesn't
-    validate. See `read_project_toml_config()`.
+    True if the blend file is inside a folder structure with valid project root folder,
+    false if no project is found or if the project is invalid.
     """
     project_root = find_project_root_from_blend_file_path(blend_file_path)
     if project_root is None:
-        return False
-
-    try:
-        _ = read_project_toml_config(project_root, None)
-    except ProjectLoadException:
-        # No valid project found.
         return False
 
     return True
@@ -295,85 +114,6 @@ def blend_file_is_in_valid_project(blend_file_path):
 
 # -------------------------------------------------------------
 # Operators
-
-class PROJECT_OT_NewProject(Operator):
-    """Create a new project"""
-    bl_idname = "project.new_project"
-    bl_label = "New Project"
-
-    directory: bpy.props.StringProperty(
-        name="Project Root",
-        subtype='DIR_PATH',
-        default="",
-    )
-
-    filter_folder: bpy.props.BoolProperty(
-        name="Filter folders",
-        default=True,
-        options={'HIDDEN'},
-    )
-
-    @classmethod
-    def poll(cls, context):
-        return bpy.data.project is None and bpy.data.filepath != ""
-
-    def execute(self, context):
-        from pathlib import Path
-
-        if self.directory == "":
-            self.report({'ERROR'}, "Cannot create a project with an empty directory path.")
-            return {'CANCELLED'}
-
-        if not bpy.path.is_subdir(path=bpy.data.filepath, directory=self.directory):
-            self.report({'ERROR'}, "New project directory must be a parent of the currently open blend file.")
-            return {'CANCELLED'}
-
-        # Double-check that we're not already in a project directory.
-        #
-        # Under normal circumstances this should never happen, because a project
-        # would already be loaded in that case, and thus `poll()` would fail.
-        # But if someone manually calls `bpy.data.project_clear()` then this can
-        # happen.
-        if blend_file_is_in_valid_project(Path(bpy.data.filepath)):
-            self.report(
-                {'ERROR'}, (
-                    "New project directory is already inside of an existing project. "
-                    "Try reloading the current blend file to open the existing project."
-                )
-            )
-            return {'CANCELLED'}
-
-        # Get the initial project name based on the folder name.
-        #
-        # If the folder name contains no valid unicode (resulting in an empty
-        # string after processing), we fallback to a default.
-        project_name = os.path.basename(os.path.normpath(self.directory)).title() \
-            .encode('utf-8', 'surrogateescape') \
-            .decode('utf-8', 'ignore') \
-            or data_(PROJECT_DEFAULT_NAME)
-
-        # Create the project.
-        bpy.data.project_init(project_name, self.directory)
-
-        # Immediately save the project.
-        try:
-            save_project(bpy.data.project, self.report)
-        except ProjectSaveException:
-            # Reporting is handled by `save_project()` call in the `try` block.
-            return {'CANCELLED'}
-
-        return {'FINISHED'}
-
-    def invoke(self, context, event):
-        # Set our initial path as the directory that contains the currently open
-        # blend file.
-        dirpath = os.path.dirname(bpy.data.filepath)
-        if dirpath != "":
-            self.directory = dirpath
-
-        context.window_manager.fileselect_add(self)
-        return {'RUNNING_MODAL'}
-
 
 class PROJECT_OT_SaveProject(Operator):
     """Save the current project to disk"""
@@ -386,22 +126,111 @@ class PROJECT_OT_SaveProject(Operator):
 
     def execute(self, context):
         try:
-            save_project(bpy.data.project, self.report)
-        except ProjectSaveException:
-            # Reporting is handled by `save_project()` call in the `try` block.
+            bpy.data.project_save()
+        except RuntimeError:
             return {'CANCELLED'}
 
         return {'FINISHED'}
 
 
-class PROJECT_OT_OpenBlendInProject(Operator):
-    """Opens a blend file, but only if it's inside of a project."""
-    bl_idname = "project.open_blend_in_project"
-    bl_label = "Open File..."
+class PROJECT_OT_AddVariable(Operator):
+    """Add a new variable to the current project"""
+    bl_idname = "project.add_variable"
+    bl_label = "Add Variable"
 
-    filepath: bpy.props.StringProperty(
-        name="Blend file path",
-        subtype='FILE_PATH',
+    variable_type: bpy.props.EnumProperty(
+        default='STRING',
+        items=[
+            ('STRING', "String Variable", ""),
+            ('FILEPATH', "Filepath Variable", ""),
+            ('INTEGER', "Integer Variable", ""),
+            ('FLOAT', "Float Variable", ""),
+        ],
+    )
+
+    @classmethod
+    def poll(cls, context):
+        return bpy.data.project is not None
+
+    def execute(self, context):
+        match self.variable_type:
+            case 'STRING':
+                bpy.data.project.variables.new(name="string_variable", type='STRING')
+            case 'FILEPATH':
+                var = bpy.data.project.variables.new(name="filepath_variable", type='STRING')
+                var.subtype = 'FILEPATH'
+            case 'INTEGER':
+                bpy.data.project.variables.new(name="integer_variable", type='INTEGER')
+            case 'FLOAT':
+                bpy.data.project.variables.new(name="float_variable", type='FLOAT')
+            case _:
+                assert (False)
+
+        return {'FINISHED'}
+
+
+class PROJECT_OT_RemoveVariable(Operator):
+    """Remove the active variable from the current project"""
+    bl_idname = "project.remove_variable"
+    bl_label = "Remove Variable"
+
+    @classmethod
+    def poll(cls, context):
+        project = bpy.data.project
+        if project is None:
+            return False
+        return project.active_variable_index >= 0 and project.active_variable_index < len(project.variables)
+
+    def execute(self, context):
+        project = bpy.data.project
+        var = project.variables[project.active_variable_index]
+        project.variables.remove(var)
+
+        return {'FINISHED'}
+
+
+class PROJECT_OT_MoveVariable(Operator):
+    """Move the active variable up or down in the list of variables"""
+    bl_idname = "project.move_variable"
+    bl_label = "Move Variable"
+
+    direction: bpy.props.EnumProperty(items=[
+        ('UP', "Move Up", ""),
+        ('DOWN', "Move Down", ""),
+    ])
+
+    @classmethod
+    def poll(cls, context):
+        project = bpy.data.project
+        if project is None:
+            return False
+        return project.active_variable_index >= 0 and project.active_variable_index < len(project.variables)
+
+    def execute(self, context):
+        project = bpy.data.project
+
+        index = project.active_variable_index
+        if self.direction == 'UP' and index > 0:
+            project.variables.move(index, index - 1)
+            project.active_variable_index -= 1
+        elif self.direction == 'DOWN' and (index + 1) < len(project.variables):
+            project.variables.move(index, index + 1)
+            project.active_variable_index += 1
+        return {'FINISHED'}
+
+
+class PROJECT_OT_AssetLibraryAdd(Operator):
+    """
+    Register a directory to be used by the Asset Browser and other places showing assets,
+    as source of assets within the current project.
+    """
+    bl_idname = "project.asset_library_add"
+    bl_label = "Add Asset Library"
+    bl_options = {'INTERNAL'}
+
+    directory: bpy.props.StringProperty(
+        name="Asset Library Directory",
+        subtype='DIR_PATH',
         default="",
     )
 
@@ -411,32 +240,62 @@ class PROJECT_OT_OpenBlendInProject(Operator):
         options={'HIDDEN'},
     )
 
-    filter_blender: bpy.props.BoolProperty(
-        name="Filter blend files",
-        default=True,
-        options={'HIDDEN'},
-    )
-
     @classmethod
     def poll(cls, context):
-        return True
+        return bpy.data.project is not None
 
     def execute(self, context):
-        from pathlib import Path
-
-        if not blend_file_is_in_valid_project(Path(self.filepath)):
-            self.report(
-                {'ERROR'},
-                "Selected blend file is not part of a project.")
+        if self.directory == "":
+            self.report({'ERROR'}, "Cannot create an asset library with an empty directory path.")
             return {'CANCELLED'}
 
-        bpy.ops.wm.open_mainfile(filepath=self.filepath)
+        # Create an initial name from the folder name
+        #
+        # If the folder name contains no valid unicode (resulting in an empty
+        # string after processing), we fallback to a default.
+        asset_library_path = os.path.normpath(self.directory)
+        asset_library_name = os.path.basename(asset_library_path).title() \
+            .encode('utf-8', 'surrogateescape') \
+            .decode('utf-8', 'ignore') \
+            or data_(ASSET_LIBRARY_DEFAULT_NAME)
+
+        bpy.data.project.asset_libraries.new(name=asset_library_name, directory=asset_library_path)
 
         return {'FINISHED'}
 
     def invoke(self, context, event):
         context.window_manager.fileselect_add(self)
         return {'RUNNING_MODAL'}
+
+
+class PROJECT_OT_AssetLibraryRemove(Operator):
+    """
+    Deregister an asset library so that its directory will no longer show up in
+    Asset Browsers and other places showing assets.
+    """
+    bl_idname = "project.asset_library_remove"
+    bl_label = "Remove Project Asset Library"
+    bl_options = {'INTERNAL'}
+
+    index: bpy.props.IntProperty(
+        name="Index",
+        default=0,
+    )
+
+    @classmethod
+    def poll(cls, context):
+        if bpy.data.project is None:
+            return False
+        return len(bpy.data.project.asset_libraries) != 0
+
+    def execute(self, context):
+        if self.index >= len(bpy.data.project.asset_libraries):
+            return {'CANCELLED'}
+
+        library = bpy.data.project.asset_libraries[self.index]
+        bpy.data.project.asset_libraries.remove(library)
+
+        return {'FINISHED'}
 
 
 # -------------------------------------------------------------
@@ -461,8 +320,8 @@ def on_blend_load(blend_path):
     # Auto-save the current project before loading a different blend file.
     if bpy.context.preferences.use_project_auto_save and bpy.data.project is not None and bpy.data.project.is_dirty:
         try:
-            save_project(bpy.data.project)
-        except ProjectSaveException:
+            bpy.data.project_save()
+        except RuntimeError:
             log_project_save_error()
 
     # Load the project (or clear if none) for the blend file we're about to
@@ -477,10 +336,7 @@ def on_blend_load(blend_path):
 def on_blend_save(blend_path):
     # Auto-save project when saving the current blend file.
     if bpy.context.preferences.use_project_auto_save and bpy.data.project is not None and bpy.data.project.is_dirty:
-        try:
-            save_project(bpy.data.project)
-        except ProjectSaveException:
-            log_project_save_error()
+        bpy.data.project_save()
 
     # In case we're saving the blend to disk for the first time or to a new
     # location, load the project there (if any).
@@ -500,19 +356,19 @@ def on_exit(is_user_exit):
         return
 
     if bpy.context.preferences.use_project_auto_save and bpy.data.project is not None and bpy.data.project.is_dirty:
-        try:
-            save_project(bpy.data.project)
-        except ProjectSaveException:
-            log_project_save_error()
+        bpy.data.project_save()
 
 
 # -----------------------------------------------------------------------------
 # Register
 
 classes = (
-    PROJECT_OT_NewProject,
     PROJECT_OT_SaveProject,
-    PROJECT_OT_OpenBlendInProject,
+    PROJECT_OT_AddVariable,
+    PROJECT_OT_RemoveVariable,
+    PROJECT_OT_MoveVariable,
+    PROJECT_OT_AssetLibraryAdd,
+    PROJECT_OT_AssetLibraryRemove,
 )
 
 

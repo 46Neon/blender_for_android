@@ -15,8 +15,22 @@
 !.editorconfig
 !.well-known/
 
-# Deliberately still ignored by the rule above: .claude/ (local agent settings),
-# .vscode/, .idea/, .gradle/, .venv/ and the various tool caches.
+# The agent skills are versioned; the local agent settings are not. Three of the
+# skills were already in the repository, added past this rule with `git add -f`,
+# which left the other two invisible: an ignored file is skipped by `git add -A`
+# in silence, and `git status` calls the tree clean while they sit unversioned on
+# one machine. Un-ignoring the directory is what makes that stop happening.
+#
+# The order matters. `.*` above stops git from descending into `.claude` at all,
+# so the directory has to be re-included before anything inside it can be, and
+# `settings.local.json` -- machine-specific paths, of no use to a clone -- is then
+# excluded again by ignoring the directory's own files.
+!.claude/
+.claude/*
+!.claude/skills/
+
+# Deliberately still ignored by the rule above: .vscode/, .idea/, .gradle/,
+# .venv/ and the various tool caches.
 
 # python temp paths
 __pycache__/

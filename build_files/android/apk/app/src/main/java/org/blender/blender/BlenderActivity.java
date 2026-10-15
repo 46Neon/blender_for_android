@@ -9,6 +9,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.res.AssetManager;
 import android.database.Cursor;
+import android.hardware.input.InputManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -23,6 +24,8 @@ import android.provider.Settings;
 import android.system.Os;
 import android.text.InputType;
 import android.util.Log;
+import android.view.InputDevice;
+import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
@@ -75,7 +78,8 @@ public class BlenderActivity extends NativeActivity {
   private InputView inputView;
 
   private native void nativeOnCommitText(String text);
-  private native void nativeOnKey(int keycode, int action, int metaState);
+  private native void nativeOnKey(
+      int keycode, int action, int metaState, int unicode, boolean repeat);
   private native void nativeOpenMainFile(String path);
 
   @Override
@@ -94,6 +98,9 @@ public class BlenderActivity extends NativeActivity {
 
     inputView = new InputView(this);
     addContentView(inputView, new ViewGroup.LayoutParams(1, 1));
+    /* Delivered on this (the UI) thread, like showKeyboard()'s work. */
+    ((InputManager)getSystemService(Context.INPUT_SERVICE))
+        .registerInputDeviceListener(keyboardListener, null);
   }
 
   /* Scoped storage confines the app to its sandbox, but Blender opens and saves
@@ -570,21 +577,149 @@ public class BlenderActivity extends NativeActivity {
     }
   }
 
+  /* Accent typed on a dead key, waiting for the letter it goes on (ABNT2's ~ and ´, for one). */
+  private int pendingDeadKey = 0;
+
+  /* The character a key press types, or 0 if it types none. Ctrl, Super and the left Alt turn a
+   * key into a shortcut, so Ctrl+C in a text field must not also insert a "c". AltGr (the right
+   * Alt) stays: layouts use it for ordinary characters such as "/" and "?" on ABNT2. */
+  private int unicodeFor(KeyEvent event) {
+    if (event.getAction() != KeyEvent.ACTION_DOWN) {
+      return 0;
+    }
+    final int meta = event.getMetaState();
+    if ((meta & (KeyEvent.META_CTRL_ON | KeyEvent.META_META_ON | KeyEvent.META_ALT_LEFT_ON)) != 0) {
+      return 0;
+    }
+    int unicode = event.getUnicodeChar(meta);
+    if ((unicode & KeyCharacterMap.COMBINING_ACCENT) != 0) {
+      /* A dead key types nothing by itself; remember the accent for the next letter. */
+      if (event.getRepeatCount() == 0) {
+        pendingDeadKey = unicode & KeyCharacterMap.COMBINING_ACCENT_MASK;
+      }
+      return 0;
+    }
+    if (unicode != 0 && pendingDeadKey != 0) {
+      final int composed = KeyCharacterMap.getDeadChar(pendingDeadKey, unicode);
+      pendingDeadKey = 0;
+      if (composed != 0) {
+        return composed;
+      }
+    }
+    return unicode;
+  }
+
+  /* Sends a key from a physical keyboard to Blender, with the character it types.
+   *
+   * Without this a hardware keyboard only half worked: the native input queue turned key codes
+   * into events with no character, so Space, Backspace, Enter and the arrows worked while
+   * letters, digits and punctuation did nothing in a text field. Returns whether the event was
+   * taken. */
+  private boolean forwardHardwareKey(KeyEvent event) {
+    if ((event.getFlags() & KeyEvent.FLAG_SOFT_KEYBOARD) != 0) {
+      /* From the IME; InputConnection already forwards those. */
+      return false;
+    }
+    final int action = event.getAction();
+    if (action != KeyEvent.ACTION_DOWN && action != KeyEvent.ACTION_UP) {
+      return false;
+    }
+    final int code = event.getKeyCode();
+    /* Volume, power, media keys and the like belong to the system. */
+    if (event.isSystem() && code != KeyEvent.KEYCODE_BACK) {
+      return false;
+    }
+    nativeOnKey(code, action, event.getMetaState(), unicodeFor(event), event.getRepeatCount() > 0);
+    return true;
+  }
+
+  /* Native hands over every key it does not take, and these are all of them: see
+   * GHOST_SystemAndroid::handleKeyEvent. */
+  @Override
+  public boolean dispatchKeyEvent(KeyEvent event) {
+    if (forwardHardwareKey(event)) {
+      return true;
+    }
+    return super.dispatchKeyEvent(event);
+  }
+
+  /* Whether Blender is editing text, i.e. would like a keyboard. Only touched on the UI thread. */
+  private boolean textEditing = false;
+
+  /* A keyboard that can type. Volume and power buttons, headsets, a watch's media controls and
+   * the touch screen all register as keyboards too, but as KEYBOARD_TYPE_NON_ALPHABETIC; the
+   * platform's own virtual device is alphabetic but virtual. isExternal() keeps out anything
+   * built into the phone that claims to be alphabetic without having letters to press. */
+  private static boolean isPhysicalKeyboard(InputDevice device) {
+    return device != null && device.isEnabled() && !device.isVirtual() && device.isExternal()
+        && device.getKeyboardType() == InputDevice.KEYBOARD_TYPE_ALPHABETIC;
+  }
+
+  private static boolean hasPhysicalKeyboard() {
+    for (int id : InputDevice.getDeviceIds()) {
+      if (isPhysicalKeyboard(InputDevice.getDevice(id))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /* Raises the platform keyboard only when it is the one way to type. With a Bluetooth or USB
+   * keyboard connected it would cover half the screen while typing nothing -- the same reason it
+   * stays down while Blender's own on-screen keyboard is open (see textedit_begin). Physical keys
+   * do not need it: they arrive through dispatchKeyEvent whether or not it is up. */
+  private void updateSoftKeyboard() {
+    InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
+    if (textEditing && !hasPhysicalKeyboard()) {
+      inputView.setFocusableInTouchMode(true);
+      inputView.requestFocus();
+      imm.showSoftInput(inputView, InputMethodManager.SHOW_IMPLICIT);
+    }
+    else {
+      imm.hideSoftInputFromWindow(inputView.getWindowToken(), 0);
+    }
+  }
+
+  /* A keyboard paired or switched off while a field is open: swap to or from the platform one
+   * right away, rather than at the next field. */
+  private final InputManager.InputDeviceListener keyboardListener =
+      new InputManager.InputDeviceListener() {
+        @Override
+        public void onInputDeviceAdded(int deviceId) {
+          updateSoftKeyboard();
+        }
+
+        @Override
+        public void onInputDeviceRemoved(int deviceId) {
+          updateSoftKeyboard();
+        }
+
+        @Override
+        public void onInputDeviceChanged(int deviceId) {
+          updateSoftKeyboard();
+        }
+      };
+
+  @Override
+  protected void onDestroy() {
+    ((InputManager)getSystemService(Context.INPUT_SERVICE))
+        .unregisterInputDeviceListener(keyboardListener);
+    super.onDestroy();
+  }
+
   /* Called from native (popupOnScreenKeyboard). */
   public void showKeyboard() {
     runOnUiThread(() -> {
-      inputView.setFocusableInTouchMode(true);
-      inputView.requestFocus();
-      InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
-      imm.showSoftInput(inputView, InputMethodManager.SHOW_IMPLICIT);
+      textEditing = true;
+      updateSoftKeyboard();
     });
   }
 
   /* Called from native (hideOnScreenKeyboard). */
   public void hideKeyboard() {
     runOnUiThread(() -> {
-      InputMethodManager imm = (InputMethodManager)getSystemService(Context.INPUT_METHOD_SERVICE);
-      imm.hideSoftInputFromWindow(inputView.getWindowToken(), 0);
+      textEditing = false;
+      updateSoftKeyboard();
     });
   }
 
@@ -599,6 +734,18 @@ public class BlenderActivity extends NativeActivity {
     @Override
     public boolean onCheckIsTextEditor() {
       return true;
+    }
+
+    /* While this view has focus the IME sees physical keys before anything else, and swallows
+     * the ones it turns into composing text. Taking them first keeps a hardware keyboard on the
+     * same path whether or not the soft keyboard is up. Back is left to the IME, so it can still
+     * dismiss itself. */
+    @Override
+    public boolean onKeyPreIme(int keyCode, KeyEvent event) {
+      if (keyCode == KeyEvent.KEYCODE_BACK) {
+        return false;
+      }
+      return forwardHardwareKey(event);
     }
 
     @Override
@@ -639,8 +786,8 @@ public class BlenderActivity extends NativeActivity {
            * points, since that is what one delete removes on Blender's side. */
           final int stale = composing.codePointCount(common, composing.length());
           for (int i = 0; i < stale; i++) {
-            nativeOnKey(KeyEvent.KEYCODE_DEL, KeyEvent.ACTION_DOWN, 0);
-            nativeOnKey(KeyEvent.KEYCODE_DEL, KeyEvent.ACTION_UP, 0);
+            nativeOnKey(KeyEvent.KEYCODE_DEL, KeyEvent.ACTION_DOWN, 0, 0, false);
+            nativeOnKey(KeyEvent.KEYCODE_DEL, KeyEvent.ACTION_UP, 0, 0, false);
           }
           if (common < text.length()) {
             nativeOnCommitText(text.substring(common));
@@ -675,7 +822,11 @@ public class BlenderActivity extends NativeActivity {
           /* A key event outside the composition, so what was mirrored so far
            * stands on its own. */
           composing = "";
-          nativeOnKey(event.getKeyCode(), event.getAction(), event.getMetaState());
+          nativeOnKey(event.getKeyCode(),
+                      event.getAction(),
+                      event.getMetaState(),
+                      unicodeFor(event),
+                      event.getRepeatCount() > 0);
           return true;
         }
 
@@ -683,8 +834,8 @@ public class BlenderActivity extends NativeActivity {
         public boolean deleteSurroundingText(int beforeLength, int afterLength) {
           composing = "";
           for (int i = 0; i < beforeLength; i++) {
-            nativeOnKey(KeyEvent.KEYCODE_DEL, KeyEvent.ACTION_DOWN, 0);
-            nativeOnKey(KeyEvent.KEYCODE_DEL, KeyEvent.ACTION_UP, 0);
+            nativeOnKey(KeyEvent.KEYCODE_DEL, KeyEvent.ACTION_DOWN, 0, 0, false);
+            nativeOnKey(KeyEvent.KEYCODE_DEL, KeyEvent.ACTION_UP, 0, 0, false);
           }
           return true;
         }

@@ -130,6 +130,9 @@ class GHOST_WindowWayland : public GHOST_Window {
 
   uint16_t getDPIHint() override;
 
+  /** \copydoc #GHOST_IWindow::getTiledEdges */
+  GHOST_TWindowTiledFlag getTiledEdges() const override;
+
   GHOST_TSuccess setWindowCursorGrab(GHOST_TGrabCursorMode mode) override;
 
   GHOST_TSuccess setWindowCursorShape(GHOST_TStandardCursor shape) override;
@@ -245,6 +248,8 @@ class GHOST_WindowWayland : public GHOST_Window {
   GHOST_TWindowState xdg_toplevel_state_get();
 
   const GHOST_CSD_Elem *csd_layout(int *r_num);
+  /** Re-apply the desktop's button layout, use when it changes. */
+  void csd_layout_refresh();
   GHOST_CSD_EventState &csd_eventstate_get();
 
   GHOST_TCSD_Type csd_elem_active_type_get() const;

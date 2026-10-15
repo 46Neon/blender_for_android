@@ -75,7 +75,8 @@ class GHOST_SystemAndroid : public GHOST_System {
 
   /* Soft-keyboard input forwarded from the Java InputConnection bridge. */
   void handleTextInput(const char *utf8_string);
-  void handleJavaKeyEvent(int32_t keycode, int32_t action, int32_t meta_state);
+  void handleJavaKeyEvent(
+      int32_t keycode, int32_t action, int32_t meta_state, int32_t unicode, bool repeat);
 
   /** A `.blend` the system asked us to open, forwarded from `onNewIntent`. Becomes a
    * #GHOST_kEventOpenMainFile, which the window manager answers with
@@ -132,6 +133,11 @@ class GHOST_SystemAndroid : public GHOST_System {
    * stays 0, so the window manager re-reads getModifierKeys() on every button event and would
    * otherwise cancel the modifier right back out. */
   bool touch_shift_active_;
+  /* Three fingers are down and have neither travelled far enough to be a pan nor lifted to be a
+   * tap. Where and when the third one landed is what both are measured from. */
+  bool touch_three_pending_;
+  uint64_t touch_three_time_;
+  int32_t touch_three_x_, touch_three_y_;
 
   /* Finger touch: the button is decided after the press, so that holding still
    * becomes a right-click while moving or a quick tap stays a left-click. */
@@ -141,6 +147,8 @@ class GHOST_SystemAndroid : public GHOST_System {
   void touchSendButton(GHOST_TButton mask, GHOST_TEventType type);
   /* Press/release the synthetic Shift, keeping meta_state_ in step. */
   void touchSendShift(bool down);
+  /* Press and release Ctrl+Space (Toggle Maximize Area), for the three-finger tap. */
+  void touchSendFullArea();
   /* Release the three-finger pan, if one is running. */
   void touchEndPan();
   void touchCancelPending();
@@ -165,11 +173,13 @@ class GHOST_SystemAndroid : public GHOST_System {
    * is only safe to touch from Blender's thread, so they are queued and drained
    * in processEvents(). */
   struct JavaKeyEvent {
-    int32_t keycode, action, meta_state;
+    int32_t keycode, action, meta_state, unicode;
+    bool repeat;
   };
   void drainJavaInput();
   void dispatchTextInput(const char *utf8_string);
-  void dispatchJavaKeyEvent(int32_t keycode, int32_t action, int32_t meta_state);
+  void dispatchJavaKeyEvent(
+      int32_t keycode, int32_t action, int32_t meta_state, int32_t unicode, bool repeat);
   std::mutex java_input_mutex_;
   std::vector<std::string> java_text_;
   std::vector<JavaKeyEvent> java_keys_;

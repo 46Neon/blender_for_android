@@ -14,7 +14,8 @@ namespace blender {
 
 namespace gpu {
 struct VKExtensions;
-}
+struct VKWorkarounds;
+}  // namespace gpu
 
 namespace gpu::render_graph {
 class VKCommandBufferInterface {
@@ -23,6 +24,8 @@ class VKCommandBufferInterface {
   /** When set, the device lacks VK_KHR_dynamic_rendering; use the render-pass
    * fallback (begin_render_pass/end_render_pass) instead of begin/end_rendering. */
   bool use_render_pass_fallback = false;
+  bool use_multi_draw_indirect = true;
+  bool use_dynamic_state_viewport_scissor = true;
 
   VKCommandBufferInterface() {}
   virtual ~VKCommandBufferInterface() = default;
@@ -175,7 +178,8 @@ class VKCommandBufferWrapper : public VKCommandBufferInterface {
  public:
   VKCommandBufferWrapper(VkCommandBuffer vk_command_buffer,
                          const VolkDeviceTable &functions,
-                         const VKExtensions &extensions);
+                         const VKExtensions &extensions,
+                         const VKWorkarounds &workarounds);
 
   void begin_recording() override;
   void end_recording() override;

@@ -78,17 +78,17 @@ static GHOST_SystemAndroid *android_system()
 
 /* Read optional launch arguments from <internalDataPath>/blender_args.txt.
  * Returns an empty vector when the file is absent, which keeps the built-in defaults. */
-static std::vector<std::string> ghost_android_read_launch_args(android_app *app)
+static void ghost_android_read_args_file(const char *dir, std::vector<std::string> &args)
 {
-  std::vector<std::string> args;
-  if (app == nullptr || app->activity == nullptr || app->activity->internalDataPath == nullptr) {
-    return args;
+  if (dir == nullptr) {
+    return;
   }
-  const std::string path = std::string(app->activity->internalDataPath) + "/blender_args.txt";
+  const std::string path = std::string(dir) + "/blender_args.txt";
   FILE *file = fopen(path.c_str(), "r");
   if (file == nullptr) {
-    return args;
+    return;
   }
+  const size_t count_before = args.size();
   char token[512];
   while (fscanf(file, "%511s", token) == 1) {
     args.push_back(token);
@@ -97,8 +97,26 @@ static std::vector<std::string> ghost_android_read_launch_args(android_app *app)
   __android_log_print(ANDROID_LOG_INFO,
                       "blender",
                       "[BlenderAndroid] %zu launch argument(s) from %s",
-                      args.size(),
+                      args.size() - count_before,
                       path.c_str());
+}
+
+/* Launch arguments from `blender_args.txt`, read from the app's internal files directory and then
+ * from its external one, `/sdcard/Android/data/org.blender.blender/files`.
+ *
+ * The external one is the debug mode's way in (`build_files/android/debug.sh on ...`): `adb` can
+ * write there on any build, where the internal directory needs a debuggable APK and `run-as`. No
+ * other app can, scoped storage keeps every app out of the others' directories, and only
+ * arguments are read from it. Returns an empty vector when neither file exists, which keeps the
+ * built-in defaults. */
+static std::vector<std::string> ghost_android_read_launch_args(android_app *app)
+{
+  std::vector<std::string> args;
+  if (app == nullptr || app->activity == nullptr) {
+    return args;
+  }
+  ghost_android_read_args_file(app->activity->internalDataPath, args);
+  ghost_android_read_args_file(app->activity->externalDataPath, args);
   return args;
 }
 
@@ -220,10 +238,16 @@ extern "C" JNIEXPORT void JNICALL Java_org_blender_blender_BlenderActivity_nativ
 }
 
 extern "C" JNIEXPORT void JNICALL Java_org_blender_blender_BlenderActivity_nativeOnKey(
-    JNIEnv * /*env*/, jobject /*thiz*/, jint keycode, jint action, jint meta_state)
+    JNIEnv * /*env*/,
+    jobject /*thiz*/,
+    jint keycode,
+    jint action,
+    jint meta_state,
+    jint unicode,
+    jboolean repeat)
 {
   if (GHOST_SystemAndroid *system = android_system_if_ready()) {
-    system->handleJavaKeyEvent(keycode, action, meta_state);
+    system->handleJavaKeyEvent(keycode, action, meta_state, unicode, repeat != JNI_FALSE);
   }
 }
 

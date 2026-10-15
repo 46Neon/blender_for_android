@@ -269,14 +269,35 @@ void uiTemplateInputStatus(Layout *layout, bContext *C)
   wmWindow *win = CTX_wm_window(C);
   WorkSpace *workspace = CTX_wm_workspace(C);
 
+  /* What the status bar shows is what decides whether the modifier wheel offers Enter and Esc:
+   * cleared here, and set again below only for keys that are shown without a modifier. */
+  WM_modifier_wheel_confirm_set(win, false, false);
+
   /* Workspace status text has priority. */
   if (!workspace->runtime->status.is_empty()) {
     Layout &row = layout->row(true);
+    bool previous_icon_is_modifier = false;
     for (const bke::WorkSpaceStatusItem &item : workspace->runtime->status) {
       if (item.space_factor != 0.0f) {
         row.separator(item.space_factor);
       }
       else {
+        if (ELEM(item.icon,
+                 ICON_EVENT_SHIFT,
+                 ICON_EVENT_CTRL,
+                 ICON_EVENT_ALT,
+                 ICON_EVENT_OS,
+                 ICON_EVENT_HYPER))
+        {
+          previous_icon_is_modifier = true;
+        }
+        else {
+          if (!previous_icon_is_modifier) {
+            WM_modifier_wheel_confirm_add(
+                win, item.icon == ICON_EVENT_RETURN, item.icon == ICON_EVENT_ESC);
+          }
+          previous_icon_is_modifier = false;
+        }
         Button *but = uiItemL_ex(&row, item.text, item.icon, false, false);
         if (item.inverted) {
           but->drawflag |= BUT_ICON_INVERT;
@@ -394,7 +415,13 @@ static std::string template_status_tooltip(bContext *C, void * /*argN*/, const S
     tooltip_message += RPT_(
         "This file is managed by the Blender asset system and cannot be overridden");
   }
-  if (bmain->colorspace.is_missing_opencolorio_config) {
+  if (bmain->colorspace.is_failed_opencolorio_config) {
+    if (!tooltip_message.empty()) {
+      tooltip_message += "\n\n";
+    }
+    tooltip_message += RPT_("OpenColorIO configuration failed to load");
+  }
+  else if (bmain->colorspace.is_missing_opencolorio_config) {
     if (!tooltip_message.empty()) {
       tooltip_message += "\n\n";
     }

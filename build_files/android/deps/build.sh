@@ -972,6 +972,32 @@ build_pip() {
   echo "[deps] installed pip $v -> $site/pip"
 }
 
+# The pure-Python packages desktop Blender ships for its HTTP downloader, which the remote asset
+# libraries -- Online Essentials among them -- are listed and fetched through
+# (`_bpy_internal/http/downloader.py`, which imports requests and cattrs at module level).
+# Versions follow build_environment/cmake/versions.cmake. All of them publish py3-none-any
+# wheels; `--platform any --only-binary` makes pip take those, rather than the host's compiled
+# charset_normalizer, which would not load on the device.
+build_remote_asset_python_deps() {
+  local site="$LIBDIR/python/lib/python3.13/site-packages"
+  local pkg
+  local specs=()
+  for pkg in REQUESTS:requests URLLIB3:urllib3 IDNA:idna CHARSET_NORMALIZER:charset_normalizer \
+             ATTRS:attrs CATTRS:cattrs TYPING_EXTENSIONS:typing_extensions; do
+    specs+=("${pkg#*:}==$(dep_version "${pkg%%:*}_VERSION")")
+  done
+  "$(host_python)" -m pip install -q --no-deps --no-compile --upgrade \
+    --platform any --python-version 3.13 --implementation py --abi none --only-binary=:all: \
+    --target "$site" "${specs[@]}"
+  for pkg in requests urllib3 idna charset_normalizer attr cattrs; do
+    if [ ! -f "$site/$pkg/__init__.py" ]; then
+      echo "[deps] ERROR: $pkg missing from $site after install" >&2
+      return 1
+    fi
+  done
+  echo "[deps] installed ${specs[*]} -> $site"
+}
+
 build_numpy() {
   local v; v="$(dep_version NUMPY_VERSION)"
   fetch "numpy-$v.tar.gz" "https://github.com/numpy/numpy/releases/download/v$v/numpy-$v.tar.gz"
@@ -1031,6 +1057,11 @@ build_shaderc() {
     -DSPIRV_SKIP_TESTS=ON -DSPIRV_SKIP_EXECUTABLES=ON \
     -DENABLE_GLSLANG_BINARIES=OFF \
     -DBUILD_SHARED_LIBS=OFF -DSHADERC_ENABLE_SHARED_CRT=ON
+  # Blender 5.3 includes spirv/unified1/spirv.h to edit SPIR-V binaries (vk_shader_compiler.cc).
+  # The desktop library packages ship SPIRV-Headers inside shaderc's include directory; shaderc's
+  # own install does not, so put the copy it was built against in the same place.
+  mkdir -p "$LIBDIR/shaderc/include"
+  cp -r "$src/third_party/spirv-headers/include/spirv" "$LIBDIR/shaderc/include/"
 }
 
 build_meshoptimizer() {
@@ -1180,7 +1211,7 @@ ALL_DEPS=(
   opencolorio opensubdiv robinmap openimageio embree alembic materialx
   potrace gmp sqlite libffi openssl lzma bzip2 python openvdb ogg vorbis
   theora opus lame aom x265 vpx x264 ffmpeg xml2 eigen sse2neon fribidi
-  abseil vulkan_headers meshoptimizer shaderc draco numpy certifi pip usd llvm rubberband
+  abseil vulkan_headers meshoptimizer shaderc draco numpy certifi pip remote_asset_python_deps usd llvm rubberband
   ispc oidn
   manifold ceres thorvg haru fftw3 openpgl
 )

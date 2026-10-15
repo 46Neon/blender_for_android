@@ -36,10 +36,6 @@ namespace blender::gpu {
 class VKBackend;
 
 struct VKExtensions {
-  /** Does the device support VkPhysicalDeviceVulkan12Features::shaderOutputViewportIndex. */
-  bool shader_output_viewport_index = false;
-  /** Does the device support VkPhysicalDeviceVulkan12Features::shaderOutputLayer. */
-  bool shader_output_layer = false;
   /**
    * Does the device support
    * VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR::fragmentShaderBarycentric.
@@ -95,17 +91,6 @@ struct VKExtensions {
   bool maintenance4 = false;
 
   /**
-   * Does the device support logic ops.
-   */
-  bool logic_ops = false;
-
-  /**
-   * Does the device support VK_EXT_provoking_vertex (last-vertex convention).
-   * When false the default first-vertex convention is used for flat shading.
-   */
-  bool provoking_vertex = false;
-
-  /**
    * Does the device support VK_EXT_memory_priority
    */
   bool memory_priority = false;
@@ -136,9 +121,35 @@ struct VKExtensions {
   bool vertex_input_dynamic_state = false;
 
   /**
+   * Does the device support VK_EXT_provoking_vertex
+   */
+  bool provoking_vertex = false;
+
+  /**
    * Does the device support VK_EXT_host_image_copy
    */
   bool host_image_copy = false;
+
+  /**
+   * Does the device support VK_EXT_shader_viewport_index_layer.
+   */
+  bool shader_viewport_index_layer = false;
+
+  /**
+   * Does the device support VK_KHR_spirv_1_4.
+   */
+  bool spirv_1_4 = false;
+
+  /**
+   * Does the device support VkPhysicalDeviceFeatures::multiDrawIndirect.
+   * When false, multi_draw_indirect is emulated with individual draw calls.
+   */
+  bool multi_draw_indirect = false;
+
+  /**
+   * Device supports `shaderClipDistance` feature.
+   */
+  bool shader_clip_distance = false;
 
   /** Log enabled features and extensions. */
   void log() const;
@@ -152,6 +163,15 @@ struct VKWorkarounds {
    * If set to true we should work around this issue by using a different texture format.
    */
   bool not_aligned_pixel_formats = false;
+
+  /**
+   * Some Qualcomm drivers keep command-buffer-local state written by `vkCmdSetViewport` across
+   * command buffer resets.
+   *
+   * When set, viewports and scissors are baked into the pipeline as static state and
+   * `vkCmdSetViewport`/`vkCmdSetScissor` are never used.
+   */
+  bool static_viewport_scissor = false;
 
   /** Log enabled workarounds. */
   void log() const;
@@ -248,7 +268,6 @@ class VKDevice : public NonCopyable {
   /** Features support. */
   VkPhysicalDeviceFeatures vk_physical_device_features_ = {};
   VkPhysicalDeviceVulkan11Features vk_physical_device_vulkan_11_features_ = {};
-  VkPhysicalDeviceVulkan12Features vk_physical_device_vulkan_12_features_ = {};
   VkPhysicalDeviceAccelerationStructureFeaturesKHR
       vk_physical_device_acceleration_structure_features_ = {
           VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ACCELERATION_STRUCTURE_FEATURES_KHR,
@@ -337,15 +356,6 @@ class VKDevice : public NonCopyable {
     return vk_physical_device_features_;
   }
 
-  const VkPhysicalDeviceVulkan11Features &physical_device_vulkan_11_features_get() const
-  {
-    return vk_physical_device_vulkan_11_features_;
-  }
-
-  const VkPhysicalDeviceVulkan12Features &physical_device_vulkan_12_features_get() const
-  {
-    return vk_physical_device_vulkan_12_features_;
-  }
   inline const VkPhysicalDeviceAccelerationStructureFeaturesKHR &
   physical_device_acceleration_structure_features_get() const
   {
@@ -427,6 +437,7 @@ class VKDevice : public NonCopyable {
   std::string glsl_fragment_patch_get(bool use_ray_query) const;
   std::string glsl_compute_patch_get(bool use_ray_query) const;
   shader::GeneratedSource extensions_define(StringRefNull stage_define, bool use_ray_query) const;
+  uint32_t glsl_patch_version_get(bool use_ray_query) const;
 
   /* -------------------------------------------------------------------- */
   /** \name Render graph
@@ -465,7 +476,7 @@ class VKDevice : public NonCopyable {
   {
     BLI_assert(vk_timeline_semaphore_ != VK_NULL_HANDLE);
     TimelineValue current_timeline;
-    VkResult result = functions.vkGetSemaphoreCounterValue(
+    VkResult result = functions.vkGetSemaphoreCounterValueKHR(
         vk_device_, vk_timeline_semaphore_, &current_timeline);
     UNUSED_VARS(result);
     BLI_assert_msg(

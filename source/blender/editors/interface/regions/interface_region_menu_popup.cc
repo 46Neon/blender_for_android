@@ -169,6 +169,9 @@ struct PopupMenu {
 
   int mx, my;
   bool popup, slideout;
+  /** Opened at an explicit point (see #popup_menu_invoke): placed there as is, not centered on the
+   * cursor, and not closed by the pointer moving away from it. */
+  bool anchored = false;
 
   std::function<void(bContext *C, Layout *layout)> menu_func;
 
@@ -311,7 +314,10 @@ static Block *block_func_POPUP(bContext *C, PopupBlockHandle *handle, void *arg_
 
   block_layout_resolve(block);
 
-  block_flag_enable(block, BLOCK_MOVEMOUSE_QUIT | BLOCK_NUMSELECT);
+  block_flag_enable(block, BLOCK_NUMSELECT);
+  if (!pup->anchored) {
+    block_flag_enable(block, BLOCK_MOVEMOUSE_QUIT);
+  }
 
   if (pup->popup) {
     int offset[2] = {0, 0};
@@ -322,7 +328,7 @@ static Block *block_func_POPUP(bContext *C, PopupBlockHandle *handle, void *arg_
     block_direction_set(block, direction);
 
     /* offset the mouse position, possibly based on earlier selection */
-    if (!handle->refresh) {
+    if (!handle->refresh && !pup->anchored) {
       Button *bt;
       if ((block->flag & BLOCK_POPUP_MEMORY) && (bt = popup_menu_memory_get(block))) {
         /* position mouse on last clicked item, at 0.8*width of the
@@ -414,11 +420,13 @@ static PopupBlockHandle *popup_menu_create_impl(
     Button *but,
     const char *title,
     std::function<void(bContext *, Layout *)> menu_func,
-    const bool can_refresh)
+    const bool can_refresh,
+    const bool anchored = false)
 {
   wmWindow *window = CTX_wm_window(C);
 
   PopupMenu *pup = MEM_new<PopupMenu>(__func__);
+  pup->anchored = anchored;
   pup->title = title;
   /* menu is created from a callback */
   pup->menu_func = menu_func;
@@ -626,10 +634,8 @@ void popup_menu_reports(bContext *C, ReportList *reports)
   }
 }
 
-static void popup_menu_create_from_menutype(bContext *C,
-                                            MenuType *mt,
-                                            const char *title,
-                                            const int icon)
+static void popup_menu_create_from_menutype(
+    bContext *C, MenuType *mt, const char *title, const int icon, const bool anchored = false)
 {
   PopupBlockHandle *handle = popup_menu_create_impl(
       C,
@@ -642,7 +648,8 @@ static void popup_menu_create_from_menutype(bContext *C,
         }
         item_menutype_func(C, layout, mt);
       },
-      true);
+      true,
+      anchored);
   handle->srna_owner = mt->rna_ext.srna;
   STRNCPY_UTF8(handle->menu_idname, mt->idname);
 
@@ -655,7 +662,10 @@ static void popup_menu_create_from_menutype(bContext *C,
   }
 }
 
-wmOperatorStatus popup_menu_invoke(bContext *C, const char *idname, ReportList *reports)
+wmOperatorStatus popup_menu_invoke(bContext *C,
+                                   const char *idname,
+                                   ReportList *reports,
+                                   const int anchor_xy[2])
 {
   MenuType *mt = WM_menutype_find(idname, true);
 
@@ -674,7 +684,19 @@ wmOperatorStatus popup_menu_invoke(bContext *C, const char *idname, ReportList *
 
   const char *title = CTX_IFACE_(mt->translation_context, mt->label);
   if (allow_refresh) {
-    popup_menu_create_from_menutype(C, mt, title, ICON_NONE);
+    if (anchor_xy) {
+      /* Creation reads the position from the event state, both for the block and for the handle
+       * that refreshes it, so point it at the anchor for exactly as long as that takes. */
+      wmWindow *window = CTX_wm_window(C);
+      int *xy = window->runtime->eventstate->xy;
+      const int xy_prev[2] = {xy[0], xy[1]};
+      copy_v2_v2_int(xy, anchor_xy);
+      popup_menu_create_from_menutype(C, mt, title, ICON_NONE, true);
+      copy_v2_v2_int(xy, xy_prev);
+    }
+    else {
+      popup_menu_create_from_menutype(C, mt, title, ICON_NONE);
+    }
   }
   else {
     /* If no refresh is needed, create the block directly. */
@@ -703,10 +725,6 @@ void popup_block_invoke_ex(bContext *C,
 {
   wmWindow *window = CTX_wm_window(C);
 
-#ifdef WITH_INPUT_IME
-  WM_window_IME_end(window);
-#endif
-
   PopupBlockHandle *handle = popup_block_create(
       C, nullptr, nullptr, func, nullptr, arg, arg_free, can_refresh, use_menu_scale);
   handle->popup = true;
@@ -717,8 +735,7 @@ void popup_block_invoke_ex(bContext *C,
   status.item(" ", ICON_NONE);
 
   popup_handlers_add(C, &window->runtime->modalhandlers, handle, 0);
-  block_active_only_flagged_buttons(
-      C, handle->region, static_cast<Block *>(handle->region->runtime->uiblocks.first));
+  block_active_only_flagged_buttons(C, handle->region, handle->region->runtime->uiblocks.first());
   WM_event_add_mousemove(window);
 }
 
@@ -760,8 +777,7 @@ void popup_block_ex(bContext *C,
   status.item(" ", ICON_NONE);
 
   popup_handlers_add(C, &window->runtime->modalhandlers, handle, 0);
-  block_active_only_flagged_buttons(
-      C, handle->region, static_cast<Block *>(handle->region->runtime->uiblocks.first));
+  block_active_only_flagged_buttons(C, handle->region, handle->region->runtime->uiblocks.first());
   WM_event_add_mousemove(window);
 }
 

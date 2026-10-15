@@ -260,7 +260,7 @@ if(WITH_VULKAN_BACKEND)
   find_package_wrapper(ShaderC REQUIRED)
 endif()
 
-if(WITH_CYCLES_EMBREE)
+if(WITH_EMBREE)
   find_package(Embree 4.0.0 REQUIRED)
 endif()
 

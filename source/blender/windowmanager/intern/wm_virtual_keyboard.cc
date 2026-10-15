@@ -1008,12 +1008,17 @@ static void vk_status_text(const VirtualKeyboard &vk,
   }
 }
 
+static uint8_t vk_mods_from_event_state(const wmWindow *win);
+
 static void vk_draw_cb(const wmWindow *win, void * /*customdata*/)
 {
   VirtualKeyboard &vk = g_vk;
   if (!vk.open || vk.win != win) {
     return;
   }
+  /* The caps show what the window holds, whoever pressed it. See
+   * wm_virtual_keyboard_ghost_event(). */
+  vk.mods = vk_mods_from_event_state(win);
   vk_ensure_layout(vk, const_cast<wmWindow *>(win));
   if (vk.keys.is_empty()) {
     return;
@@ -1506,6 +1511,10 @@ bool wm_virtual_keyboard_ghost_event(wmWindowManager *wm,
     return false;
   }
   vk_ensure_layout(vk, win);
+  /* Start from what the window holds, not from what this keyboard last sent. The modifier wheel
+   * latches the same three keys, and a stale copy here would release its Ctrl on the next key
+   * press -- vk_sync_ghost_mods() pushes this state onto the window. */
+  vk.mods = vk_mods_from_event_state(win);
 
   switch (type) {
     case GHOST_kEventCursorMove: {

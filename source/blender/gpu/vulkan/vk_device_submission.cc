@@ -137,7 +137,7 @@ void VKDevice::wait_for_timeline(TimelineValue timeline)
   const int max_attempts = 5;
   VkResult wait_result;
   for (int attempt = 0;; attempt++) {
-    wait_result = functions.vkWaitSemaphores(vk_device_, &vk_semaphore_wait_info, 2000000000ull);
+    wait_result = functions.vkWaitSemaphoresKHR(vk_device_, &vk_semaphore_wait_info, 2000000000ull);
     if (wait_result != VK_TIMEOUT) {
       break;
     }
@@ -250,7 +250,7 @@ void VKDevice::submission_runner(VKDevice *device)
 
       vk_command_buffer = command_buffers_unused.pop_last();
       command_buffer = std::make_optional<render_graph::VKCommandBufferWrapper>(
-          vk_command_buffer, device->functions, device->extensions_);
+          vk_command_buffer, device->functions, device->extensions_, device->workarounds_);
       command_buffer->begin_recording();
     }
 

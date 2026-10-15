@@ -52,8 +52,10 @@ set(SRC
   intern/wm_tooltip.cc
   intern/wm_uilist_type.cc
   intern/wm_utils.cc
+  intern/wm_modifier_wheel.cc
   intern/wm_virtual_keyboard.cc
   intern/wm_window.cc
+  intern/wm_window_ime_draw.cc
   gizmo/intern/wm_gizmo.cc
   gizmo/intern/wm_gizmo_group.cc
   gizmo/intern/wm_gizmo_group_type.cc
@@ -76,6 +78,7 @@ set(SRC
   wm_event_system.hh
   wm_event_types.hh
   wm_files.hh
+  wm_modifier_wheel.hh
   wm_surface.hh
   wm_window.hh
   intern/wm_platform_support.hh

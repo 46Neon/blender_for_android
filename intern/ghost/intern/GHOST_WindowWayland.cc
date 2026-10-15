@@ -46,7 +46,6 @@
 #include <optional>
 
 #include <cstring>    /* For `memcpy`. */
-#include <malloc.h>   /* For `malloc_usable_size`. */
 #include <sys/mman.h> /* For `munmap`. */
 
 /* Logging, use `ghost.wl.*` prefix. */
@@ -80,6 +79,12 @@ static constexpr size_t base_dpi = 96;
 struct GWL_WindowCSD {
   GHOST_CSD_Elem csd_elems[GHOST_kCSDType_NUM] = {};
   int csd_elems_num = 0;
+
+  /**
+   * Bit-mask of the button types the compositor supports,
+   * all bits set until #xdg_toplevel_listener::wm_capabilities reports otherwise.
+   */
+  uint32_t wm_capabilities_mask = ~uint32_t(0);
 
   /** Track the active type, intersecting the pointing device. */
   GHOST_TCSD_Type active_type = GHOST_kCSDTypeBody;
@@ -333,6 +338,8 @@ struct GWL_WindowFrame {
   bool is_maximised = false;
   bool is_fullscreen = false;
   bool is_active = false;
+  /** Which window edges are tiled. Requires `xdg_shell` version 2. */
+  GHOST_TWindowTiledFlag tiled_edges = GHOST_kWindowTiledNone;
   /** Disable when the fractional scale is a whole number. */
   int fractional_scale = 0;
   /**
@@ -576,6 +583,7 @@ static int gwl_window_fractional_from_viewport_round(const GWL_WindowFrame &fram
   return lroundf(double(value * FRACTIONAL_DENOMINATOR) / double(frame.fractional_scale));
 }
 
+#ifdef WITH_GHOST_CSD
 /**
  * Convert a value in physical pixels (as used by #GWL_WindowFrame.size) into the window's
  * surface-local (logical) coordinate space, as needed for WAYLAND requests that operate in
@@ -589,6 +597,7 @@ static int32_t gwl_window_physical_to_surface_local(const GWL_Window *win, const
   }
   return value / win->frame.buffer_scale;
 }
+#endif /* WITH_GHOST_CSD */
 
 static bool gwl_window_viewport_set(GWL_Window *win,
                                     bool *r_surface_needs_commit,
@@ -863,6 +872,46 @@ static void gwl_window_pending_actions_handle(GWL_Window *win)
 #endif /* USE_EVENT_BACKGROUND_THREAD */
 
 #ifdef WITH_GHOST_CSD
+/** Recalculate the decoration elements from the windows size, state & button layout. */
+static void gwl_window_csd_elems_update(GWL_Window *win)
+{
+  GWL_WindowCSD *xdg_csd = win->xdg_csd;
+  GHOST_SystemWayland *system = win->ghost_system;
+  const GHOST_CSD_Params &params = system->getWindowCSD();
+  const GHOST_CSD_Layout &button_layout = system->getWindowCSD_Layout();
+
+  const int32_t fractional_scale[2] = {
+      GHOST_CSD_DPI_FRACTIONAL_BASE,
+      win->ghost_window->getDPIHint(),
+  };
+  xdg_csd->csd_elems_num = params.layout_callback(win->frame.size,
+                                                  fractional_scale,
+                                                  gwl_window_state_get(win),
+                                                  &button_layout,
+                                                  xdg_csd->csd_elems);
+}
+
+/**
+ * Set the layout used to draw & hit-test this windows decorations,
+ * the base layout with any buttons the compositor doesn't support removed.
+ */
+static void gwl_window_csd_layout_apply(GWL_Window *win)
+{
+  const uint32_t type_mask = win->xdg_csd->wm_capabilities_mask;
+  const GHOST_CSD_Layout &layout_base = win->ghost_system->preferences_csd_button_layout_get();
+  GHOST_CSD_Layout layout = {};
+
+  int dst = 0;
+  for (int src = 0; src < layout_base.buttons_num; src++) {
+    GHOST_TCSD_Type type = layout_base.buttons[src];
+    if (type_mask & (1 << type)) {
+      layout.buttons[dst++] = type;
+    }
+  }
+  layout.buttons_num = dst;
+  win->ghost_system->setWindowCSD_Layout(layout);
+}
+
 /**
  * Keep the XDG "window geometry" in sync with the window's visible rectangle.
  * Without this the compositors default (bounding-box) geometry includes the
@@ -897,8 +946,8 @@ static void gwl_window_csd_margin_update(GWL_Window *win)
   /* Zero hides the margin: no border exists for full-screen & maximized windows,
    * a zero size means it's disabled (also accounting for rounding at extreme scales). */
   int32_t margin_local = 0;
-  if (!ELEM(gwl_window_state_get(win), GHOST_kWindowStateFullScreen, GHOST_kWindowStateMaximized))
-  {
+  const GHOST_TWindowState state = gwl_window_state_get(win);
+  if (!ELEM(state, GHOST_kWindowStateFullScreen, GHOST_kWindowStateMaximized)) {
     const GHOST_CSD_Params &params = system->getWindowCSD();
     const int32_t margin_physical = (params.resize_margin_size * win->ghost_window->getDPIHint()) /
                                     GHOST_CSD_DPI_FRACTIONAL_BASE;
@@ -961,6 +1010,82 @@ static void gwl_window_csd_margin_update(GWL_Window *win)
                               window_size_local[1] + (margin_local * 2));
   wl_surface_commit(xdg_csd->margin_surface);
 }
+
+/**
+ * Keep the main surface's opaque region in sync with the window's current size & state.
+ *
+ * CSD windows request an alpha channel so their corners can be rounded. Without an opaque region
+ * the compositor has to blend the whole window, marking everything but the corners opaque can
+ * avoid that cost.
+ */
+static void gwl_window_csd_opaque_region_update(GWL_Window *win)
+{
+  GHOST_SystemWayland *system = win->ghost_system;
+
+  const int32_t size_local[2] = {
+      gwl_window_physical_to_surface_local(win, win->frame.size[0]),
+      gwl_window_physical_to_surface_local(win, win->frame.size[1]),
+  };
+  if (size_local[0] <= 0 || size_local[1] <= 0) [[unlikely]] {
+    return;
+  }
+
+  int32_t radius_local = 0;
+  const GHOST_TWindowState state = gwl_window_state_get(win);
+  if (win->ghost_window->hasAlpha() &&
+      !ELEM(state, GHOST_kWindowStateFullScreen, GHOST_kWindowStateMaximized))
+  {
+    const GHOST_CSD_Params &params = system->getWindowCSD();
+    const int32_t radius_physical = (params.corner_radius * win->ghost_window->getDPIHint()) /
+                                    GHOST_CSD_DPI_FRACTIONAL_BASE;
+    radius_local = gwl_window_physical_to_surface_local(win, radius_physical);
+  }
+
+  wl_region *region = wl_compositor_create_region(system->wl_compositor_get());
+  if (region == nullptr) [[unlikely]] {
+    return;
+  }
+
+  wl_region_add(region, 0, 0, UNPACK2(size_local));
+
+  if (radius_local > 0) {
+    /* Cut out the corners that are actually rounded. A corner squares off when either of the
+     * edges meeting there is tiled, this must match #WM_window_csd_draw_corner_mask.
+     * Coordinates are Y-down (the top of the window is zero). */
+    const GHOST_TWindowTiledFlag tiled = win->ghost_window->getTiledEdges();
+    const struct {
+      int32_t xy[2];
+      int edges;
+    } corners[] = {
+        {
+            {0, 0},
+            GHOST_kWindowTiledLeft | GHOST_kWindowTiledTop,
+        },
+        {
+            {size_local[0] - radius_local, 0},
+            GHOST_kWindowTiledRight | GHOST_kWindowTiledTop,
+        },
+        {
+            {0, size_local[1] - radius_local},
+            GHOST_kWindowTiledLeft | GHOST_kWindowTiledBottom,
+        },
+        {
+            {size_local[0] - radius_local, size_local[1] - radius_local},
+            GHOST_kWindowTiledRight | GHOST_kWindowTiledBottom,
+        },
+    };
+    for (const auto &corner : corners) {
+      if (tiled & corner.edges) {
+        continue;
+      }
+      wl_region_subtract(region, UNPACK2(corner.xy), radius_local, radius_local);
+    }
+  }
+
+  wl_surface_set_opaque_region(win->wl.surface, region);
+  /* The compositor copies the region, it doesn't take ownership. */
+  wl_region_destroy(region);
+}
 #endif /* WITH_GHOST_CSD */
 
 /**
@@ -977,7 +1102,8 @@ static void gwl_window_frame_update_from_pending_no_lock(GWL_Window *win)
 
 #ifdef WITH_GHOST_CSD
   const bool state_changed = ((win->frame_pending.is_fullscreen != win->frame.is_fullscreen) ||
-                              (win->frame_pending.is_maximised != win->frame.is_maximised));
+                              (win->frame_pending.is_maximised != win->frame.is_maximised) ||
+                              (win->frame_pending.tiled_edges != win->frame.tiled_edges));
 #endif
 
   const bool dpi_changed = win->frame_pending.fractional_scale != win->frame.fractional_scale;
@@ -1095,19 +1221,7 @@ static void gwl_window_frame_update_from_pending_no_lock(GWL_Window *win)
       xdg_csd->csd_elems_num = 0;
     }
     else {
-      GHOST_SystemWayland *system = win->ghost_system;
-      const GHOST_CSD_Params &params = system->getWindowCSD();
-      const GHOST_CSD_Layout &button_layout = system->getWindowCSD_Layout();
-
-      const int32_t fractional_scale[2] = {
-          GHOST_CSD_DPI_FRACTIONAL_BASE,
-          win->ghost_window->getDPIHint(),
-      };
-      xdg_csd->csd_elems_num = params.layout_callback(win->frame.size,
-                                                      fractional_scale,
-                                                      gwl_window_state_get(win),
-                                                      &button_layout,
-                                                      xdg_csd->csd_elems);
+      gwl_window_csd_elems_update(win);
 
       if (state_changed) {
         /* NOTE(@ideasman42) This is not technically correct because after the
@@ -1131,6 +1245,7 @@ static void gwl_window_frame_update_from_pending_no_lock(GWL_Window *win)
 
     gwl_window_csd_geometry_update(win);
     gwl_window_csd_margin_update(win);
+    gwl_window_csd_opaque_region_update(win);
   }
 #endif /* WITH_GHOST_CSD */
 }
@@ -1271,6 +1386,7 @@ static void xdg_toplevel_handle_configure(void *data,
   win->frame_pending.is_fullscreen = false;
   win->frame_pending.is_active = false;
 
+  int tiled_edges = GHOST_kWindowTiledNone;
   enum xdg_toplevel_state *state;
   WL_ARRAY_FOR_EACH (state, states) {
     switch (*state) {
@@ -1283,10 +1399,24 @@ static void xdg_toplevel_handle_configure(void *data,
       case XDG_TOPLEVEL_STATE_ACTIVATED:
         win->frame_pending.is_active = true;
         break;
+      /* Only sent by compositors supporting `xdg_shell` version 2 or newer. */
+      case XDG_TOPLEVEL_STATE_TILED_LEFT:
+        tiled_edges |= GHOST_kWindowTiledLeft;
+        break;
+      case XDG_TOPLEVEL_STATE_TILED_RIGHT:
+        tiled_edges |= GHOST_kWindowTiledRight;
+        break;
+      case XDG_TOPLEVEL_STATE_TILED_TOP:
+        tiled_edges |= GHOST_kWindowTiledTop;
+        break;
+      case XDG_TOPLEVEL_STATE_TILED_BOTTOM:
+        tiled_edges |= GHOST_kWindowTiledBottom;
+        break;
       default:
         break;
     }
   }
+  win->frame_pending.tiled_edges = GHOST_TWindowTiledFlag(tiled_edges);
 }
 
 static void xdg_toplevel_handle_close(void *data, xdg_toplevel * /*xdg_toplevel*/)
@@ -1339,20 +1469,11 @@ static void xdg_toplevel_handle_wm_capabilities(void *data,
     }
   }
 
-  /* Filter the base CSD layout to only include supported buttons. */
   GWL_Window *win = static_cast<GWL_Window *>(data);
-  const GHOST_CSD_Layout &layout_base = win->ghost_system->csd_layout_base_get();
-  GHOST_CSD_Layout layout = {};
-
-  int dst = 0;
-  for (int src = 0; src < layout_base.buttons_num; src++) {
-    GHOST_TCSD_Type type = layout_base.buttons[src];
-    if (type_mask & (1 << type)) {
-      layout.buttons[dst++] = type;
-    }
+  if (win->xdg_csd) {
+    win->xdg_csd->wm_capabilities_mask = type_mask;
+    gwl_window_csd_layout_apply(win);
   }
-  layout.buttons_num = dst;
-  win->ghost_system->setWindowCSD_Layout(layout);
 
   /* NOTE(@ideasman42): don't trigger a redraw here.
    * In practice this callback runs on newly created windows,
@@ -1799,6 +1920,8 @@ GHOST_WindowWayland::GHOST_WindowWayland(GHOST_SystemWayland *system,
 #ifdef WITH_GHOST_CSD
   if (window_->xdg_decor && system_->use_window_frame_csd_get()) {
     window_->xdg_csd = new GWL_WindowCSD;
+    /* Rounded corners require the compositor to blend the surface. */
+    want_context_params_.use_alpha = system_->getWindowCSD().corner_radius > 0;
   }
 #endif
 
@@ -2018,6 +2141,15 @@ GHOST_WindowWayland::GHOST_WindowWayland(GHOST_SystemWayland *system,
       wp_image_description_v1_destroy(image_description);
     }
   }
+
+#ifdef WITH_GHOST_CSD
+  if (window_->xdg_csd) {
+    /* Whether the corners can be cut away is only known once the context exists, the first window
+     * frame should reflect that. Without this the compositor would keep treating the corners as
+     * opaque, showing them as solid blocks. */
+    gwl_window_csd_opaque_region_update(window_);
+  }
+#endif
 
   /* Commit after setting the buffer.
    * While postponing until after the buffer drawing is context is set
@@ -2346,6 +2478,11 @@ void GHOST_WindowWayland::clientToScreen(const int32_t inX,
   outY = inY;
 }
 
+GHOST_TWindowTiledFlag GHOST_WindowWayland::getTiledEdges() const
+{
+  return window_->frame.tiled_edges;
+}
+
 uint16_t GHOST_WindowWayland::getDPIHint()
 {
   /* Early out if use of DPI scale is disabled. */
@@ -2437,7 +2574,7 @@ GHOST_Context *GHOST_WindowWayland::newDrawingContext(GHOST_TDrawingContextType 
                                                      system_->wl_display_get(),
                                                      window_->backend.vulkan_window_info,
                                                      1,
-                                                     2,
+                                                     1,
                                                      preferred_device_,
                                                      &hdr_info_);
       if (context->initializeDrawingContext()) {
@@ -2848,6 +2985,18 @@ const GHOST_CSD_Elem *GHOST_WindowWayland::csd_layout(int *r_num)
   GHOST_ASSERT(this->system_->use_window_frame_csd_get(), "caller must ensure");
   *r_num = window_->xdg_csd->csd_elems_num;
   return window_->xdg_csd->csd_elems;
+}
+
+void GHOST_WindowWayland::csd_layout_refresh()
+{
+  if (!window_->xdg_csd) {
+    return;
+  }
+  gwl_window_csd_layout_apply(window_);
+  if (gwl_window_state_get(window_) != GHOST_kWindowStateFullScreen) {
+    gwl_window_csd_elems_update(window_);
+  }
+  this->notify_decor_redraw();
 }
 
 GHOST_CSD_EventState &GHOST_WindowWayland::csd_eventstate_get()

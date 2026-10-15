@@ -46,6 +46,22 @@ cp "$BUILD/lib/libblender.so" "$JNI/libblender.so"
 patchelf --set-soname libblender.so "$JNI/libblender.so" 2>/dev/null || true
 "$ANDROID_LLVM_BIN/llvm-strip" --strip-unneeded "$JNI/libblender.so" 2>/dev/null || true
 
+# The dex is reused too, but it is the only other thing that is ours to change. Without
+# this, an edit to BlenderActivity.java never reached the device: the APK went out with a
+# new libblender.so beside the old Java, and nothing said so. The two also share a JNI
+# contract (nativeOnKey's arguments), so shipping them out of step is a bug in itself.
+JAVA_SRC="$SCRIPT_DIR/apk/app/src/main/java/org/blender/blender/BlenderActivity.java"
+if [ "$JAVA_SRC" -nt "$STAGE/dex/classes.dex" ]; then
+  echo "=== recompile BlenderActivity (newer than the staged dex) ==="
+  rm -rf "$STAGE/javac"
+  mkdir -p "$STAGE/javac" "$STAGE/dex"
+  "${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}/bin/javac" \
+    -classpath "$ANDROID_HOME/platforms/android-35/android.jar" -source 17 -target 17 \
+    -d "$STAGE/javac" "$JAVA_SRC"
+  "$BT/d8" --min-api "${ANDROID_API:-31}" --output "$STAGE/dex" \
+    $(find "$STAGE/javac" -name '*.class')
+fi
+
 echo "=== reassemble + sign (reusing runtime payload in base.apk) ==="
 cp "$STAGE/base.apk" "$OUT"
 ( cd "$STAGE/dex" && zip -q "$OUT" classes.dex )

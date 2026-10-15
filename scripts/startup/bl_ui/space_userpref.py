@@ -590,7 +590,19 @@ class USERPREF_PT_edit_sequence_editor(EditingPanel, CenterAlignMixIn, Panel):
         prefs = context.preferences
         edit = prefs.edit
 
-        layout.prop(edit, "connect_strips_by_default")
+        layout.prop(edit, "clamp_strips_by_default")
+
+
+class USERPREF_PT_edit_sequence_editor_new_strips(EditingPanel, CenterAlignMixIn, Panel):
+    bl_label = "New Strips"
+    bl_parent_id = "USERPREF_PT_edit_sequence_editor"
+
+    def draw_centered(self, context, layout):
+        prefs = context.preferences
+        edit = prefs.edit
+
+        layout.prop(edit, "default_strip_length", text="Strip Length")
+        layout.prop(edit, "connect_strips_by_default", text="Connect Movie Strips")
 
 
 class USERPREF_PT_edit_misc(EditingPanel, CenterAlignMixIn, Panel):
@@ -682,7 +694,7 @@ class USERPREF_PT_animation_timeline_advanced(AnimationPanel, CenterAlignMixIn, 
         edit = prefs.edit
 
         layout.prop(edit, "use_negative_frames")
-        split = layout.split(factor=0.4)
+        split = layout.split(factor=layout.property_split_factor)
         split.active = edit.use_negative_frames
         split.separator()
         split.label_multiline(
@@ -1010,7 +1022,7 @@ class USERPREF_PT_system_network(SystemPanel, CenterAlignMixIn, Panel):
         # Show when the preference has been overridden and doesn't match the current preference.
         runtime_online_access = bpy.app.online_access
         if system.use_online_access != runtime_online_access:
-            row = layout.split(factor=0.4)
+            row = layout.split(factor=layout.property_split_factor)
             row.label(text="")
             if runtime_online_access:
                 text = iface_("Enabled on startup, overriding the preference.")
@@ -1080,6 +1092,14 @@ class USERPREF_PT_system_video_sequencer(SystemPanel, CenterAlignMixIn, Panel):
         layout.separator()
 
         layout.prop(system, "sequencer_proxy_setup")
+
+        layout.separator()
+
+        layout.prop(system, "use_hardware_video_decoding")
+        if prefs.experimental.use_video_decoding_debug and prefs.view.show_developer_ui:
+            row = layout.row()
+            row.active = system.use_hardware_video_decoding
+            row.prop(system, "video_decoding_device")
 
 
 # -----------------------------------------------------------------------------
@@ -1450,6 +1470,7 @@ class USERPREF_PT_theme_interface_styles(ThemePanel, CenterAlignMixIn, Panel):
 
         col = flow.column()
         col.prop(ui, "widget_text_cursor")
+        col.prop(ui, "link")
 
 
 class USERPREF_PT_theme_interface_transparent_checker(ThemePanel, CenterAlignMixIn, Panel):
@@ -1577,20 +1598,39 @@ class USERPREF_PT_theme_bone_color_sets(ThemePanel, CenterAlignMixIn, Panel):
     bl_options = {'DEFAULT_CLOSED'}
     bl_parent_id = "USERPREF_PT_theme_color_sets"
 
+    @staticmethod
+    def create_column(layout, heading="", width=None):
+        col = layout.column(align=True)
+        if width is not None:
+            col.ui_units_x = width
+
+        row = col.row()
+        row.alignment = 'CENTER'
+        row.label(text=heading)
+
+        return col
+
     def draw_centered(self, context, layout):
         theme = context.preferences.themes[0]
 
-        layout.use_property_split = True
+        row = layout.row()
+
+        color_set_col = self.create_column(row)
+        color_set_col.alignment = 'RIGHT'
+
+        row.separator()
+
+        normal_col = self.create_column(row, heading="Normal")
+        selected_col = self.create_column(row, heading="Selected")
+        active_col = self.create_column(row, heading="Active")
+        constraints_col = self.create_column(row, heading="Colored Constraints", width=10)
 
         for i, ui in enumerate(theme.bone_color_sets, 1):
-            layout.label(text=iface_("Color Set {:d}").format(i), translate=False)
-
-            flow = layout.grid_flow(row_major=False, columns=0, even_columns=True, even_rows=False, align=True)
-
-            flow.prop(ui, "normal")
-            flow.prop(ui, "select", text="Selected")
-            flow.prop(ui, "active")
-            flow.prop(ui, "show_colored_constraints")
+            color_set_col.label(text=iface_("Color Set {:d}").format(i), translate=False)
+            normal_col.prop(ui, "normal", text="")
+            selected_col.prop(ui, "select", text="")
+            active_col.prop(ui, "active", text="")
+            constraints_col.prop(ui, "show_colored_constraints", text="")
 
 
 class USERPREF_PT_theme_collection_colors(ThemePanel, CenterAlignMixIn, Panel):
@@ -1919,14 +1959,25 @@ class USERPREF_PT_file_paths_development(FilePathsPanel, Panel):
 
 
 class USERPREF_PT_saveload_autorun(FilePathsPanel, Panel):
-    bl_label = "Auto Run Python Scripts"
+    # Drawn with the checkbox so the command line override can follow it.
+    bl_label = ""
     bl_parent_id = "USERPREF_PT_saveload_blend"
 
     def draw_header(self, context):
+        layout = self.layout
         prefs = context.preferences
         paths = prefs.filepaths
 
-        self.layout.prop(paths, "use_scripts_auto_execute", text="")
+        text = iface_("Auto Run Python Scripts")
+
+        if (autoexec_override := bpy.app.autoexec_override) is not None:
+            if autoexec_override:
+                text_warn = iface_("enabled on startup, overriding the preference")
+            else:
+                text_warn = iface_("disabled on startup, overriding the preference")
+            text = "{:s} ({:s})".format(text, text_warn)
+
+        layout.prop(paths, "use_scripts_auto_execute", text=text, translate=False)
 
     def draw(self, context):
         layout = self.layout
@@ -1937,6 +1988,14 @@ class USERPREF_PT_saveload_autorun(FilePathsPanel, Panel):
         layout.use_property_decorate = False  # No animation.
 
         layout.active = paths.use_scripts_auto_execute
+
+        if paths.use_scripts_auto_execute:
+            layout.label_multiline(
+                text=(
+                    "Opening blend files from the internet and other untrusted sources is unsafe with Auto-Run. Use with caution."
+                ),
+                icon='STATUS_WARNING',
+            )
 
         box = layout.box()
         row = box.row()
@@ -2032,6 +2091,9 @@ class USERPREF_PT_saveload_blend(SaveLoadPanel, CenterAlignMixIn, Panel):
         col.prop(paths, "use_relative_paths")
         col.prop(paths, "use_file_compression")
         col.prop(paths, "use_load_ui")
+
+        col = layout.column(heading="Startup")
+        col.prop(prefs, "use_project_remember")
 
         col = layout.column(heading="Text Files")
         col.prop(paths, "use_tabs_as_spaces")
@@ -2508,13 +2570,6 @@ class USERPREF_PT_extensions_repos(Panel):
             split.prop(active_repo, "remote_url", text="", icon='INTERNET', placeholder="Repository URL")
             split = row.split()
 
-            if active_repo.use_access_token:
-                access_token_icon = 'LOCKED' if active_repo.access_token else 'UNLOCKED'
-                row = layout.row()
-                split = row.split(factor=0.936)
-                split.prop(active_repo, "access_token", icon=access_token_icon)
-                split = row.split()
-
             layout.prop(active_repo, "use_sync_on_startup")
 
         layout_header, layout_panel = layout.panel("advanced", default_closed=True)
@@ -2542,8 +2597,12 @@ class USERPREF_PT_extensions_repos(Panel):
                 sub.prop(active_repo, "directory", text="")
 
             if use_remote_url:
-                row = layout_panel.row(align=True, heading="Authentication")
-                row.prop(active_repo, "use_access_token")
+                col = layout_panel.column(align=True, heading="Authentication")
+                col.prop(active_repo, "use_access_token")
+
+                if active_repo.use_access_token:
+                    access_token_icon = 'LOCKED' if active_repo.access_token else 'UNLOCKED'
+                    col.prop(active_repo, "access_token", icon=access_token_icon)
 
                 layout_panel.prop(active_repo, "use_cache")
             else:
@@ -2599,7 +2658,6 @@ class USERPREF_PT_addons(AddOnPanel, Panel):
     _support_icon_mapping = {
         'OFFICIAL': 'BLENDER',
         'COMMUNITY': 'COMMUNITY',
-        'TESTING': 'EXPERIMENTAL',
     }
 
     @staticmethod
@@ -2830,7 +2888,7 @@ class USERPREF_PT_addons(AddOnPanel, Panel):
                 if value := bl_info["warning"]:
                     split = colsub.row().split(factor=0.15)
                     split.label(text="Warning:")
-                    split.label(text="  " + iface_(value), icon='STATUS_WARNING')
+                    split.label_multiline(text=iface_(value), icon='STATUS_WARNING')
                 del value
 
                 user_addon = USERPREF_PT_addons.is_user_addon(mod, user_addon_paths)
@@ -3144,6 +3202,7 @@ class USERPREF_PT_developer_tools(Panel):
                 ({"property": "use_viewport_debug"}, None),
                 ({"property": "use_eevee_debug"}, None),
                 ({"property": "use_paint_debug"}, None),
+                ({"property": "use_video_decoding_debug"}, None),
                 ({"property": "use_extensions_debug"}, ("/blender/blender/issues/119521", "#119521")),
                 ({"property": "write_legacy_blend_file_format"}, ("/blender/blender/issues/129309", "#129309")),
                 ({"property": "no_data_block_packing"}, ("/blender/blender/issues/132167", "#132167")),
@@ -3191,7 +3250,6 @@ class USERPREF_PT_experimental_new_features(ExperimentalPanel, Panel):
                 ({"property": "use_extended_asset_browser"},
                  ("blender/blender/projects/10", "Pipeline, Assets & IO Project Page")),
                 ({"property": "use_shader_node_previews"}, ("blender/blender/issues/110353", "#110353")),
-                ({"property": "use_collection_importer"}, ("blender/blender/issues/132171", "#132171")),
             ),
         )
 
@@ -3205,7 +3263,7 @@ class USERPREF_PT_experimental_prototypes(ExperimentalPanel, Panel):
             context.preferences,
             (
                 ({"property": "use_new_curves_tools"}, ("blender/blender/issues/68981", "#68981")),
-                ({"property": "use_sculpt_texture_paint"}, ("blender/blender/issues/96225", "#96225")),
+                ({"property": "use_3d_texture_paint"}, ("blender/blender/issues/156410", "#156410")),
             ),
         )
 
@@ -3267,6 +3325,7 @@ classes = (
     USERPREF_PT_edit_text_editor,
     USERPREF_PT_edit_node_editor,
     USERPREF_PT_edit_sequence_editor,
+    USERPREF_PT_edit_sequence_editor_new_strips,
     USERPREF_PT_edit_misc,
 
     USERPREF_PT_animation_timeline,

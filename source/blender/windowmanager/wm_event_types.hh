@@ -376,6 +376,9 @@ enum wmEventType : int16_t {
 
   /* Could become gizmo callback. */
   EVT_GIZMO_UPDATE = 0x5025, /* 20517 */
+  /* 0x5026 is left free: the `android-demo` branch uses it for hover clearing. */
+  /** Open Quick Favorites from the modifier wheel, see `wm_modifier_wheel.cc`. */
+  EVT_MODIFIER_WHEEL_MENU = 0x5027, /* 20519 */
 
   /* XR events: 0x503x. */
   EVT_XR_ACTION = 0x5030, /* 20528 */

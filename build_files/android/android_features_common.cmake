@@ -21,6 +21,11 @@ set(WITH_CODEC_SNDFILE OFF CACHE BOOL "" FORCE)
 # Draco-compressed glTF. The dependency is not cross-compiled yet;
 # see ANDROID_MISSING_FEATURES.md.
 set(WITH_DRACO OFF CACHE BOOL "" FORCE)
+# New in 5.3, and not cross-compiled for Android yet: Jolt Physics, and
+# OpenTimelineIO for the sequencer's .otio import/export. Both default ON
+# upstream and would fail the build without their libraries.
+set(WITH_JOLT OFF CACHE BOOL "" FORCE)
+set(WITH_OPENTIMELINEIO OFF CACHE BOOL "" FORCE)
 
 # Open Image Denoise needs TBB, which the lite config drops, so it is enabled
 # per-config rather than here: OFF is the default, full turns it back on.

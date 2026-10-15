@@ -92,6 +92,9 @@ void icon_draw(float x, float y, int icon_id);
 void icon_draw_alpha(float x, float y, int icon_id, float alpha);
 void icon_draw_preview(float x, float y, int icon_id, float aspect, float alpha, int size);
 
+/** Width of an event icon in keys: Ctrl, for one, is wider than a single key. */
+float event_icon_offset(int icon_id);
+
 void icon_draw_ex(float x,
                   float y,
                   int icon_id,

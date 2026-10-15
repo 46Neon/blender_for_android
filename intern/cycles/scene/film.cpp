@@ -590,9 +590,6 @@ void Film::update_passes(Scene *scene)
     if (denoiser_passes & DENOISER_PASS_DEPTH) {
       add_auto_pass(scene, PASS_DENOISING_DEPTH);
     }
-    if (denoiser_passes & DENOISER_PASS_MOTION) {
-      add_auto_pass(scene, PASS_MOTION);
-    }
     if (denoiser_passes & DENOISER_PASS_BACKWARD_MOTION) {
       add_auto_pass(scene, PASS_DENOISING_BACKWARD_MOTION);
     }
@@ -675,7 +672,8 @@ void Film::update_passes(Scene *scene)
   /* Flush scene updates. */
   const bool have_uv_pass = Pass::contains(scene->passes, PASS_UV);
   const bool have_motion_pass = Pass::contains(scene->passes, PASS_MOTION) ||
-                                Pass::contains(scene->passes, PASS_DENOISING_BACKWARD_MOTION);
+                                Pass::contains(scene->passes, PASS_DENOISING_BACKWARD_MOTION) ||
+                                Pass::contains(scene->passes, PASS_DENOISING_SPECULAR_MOTION);
   const bool have_ao_pass = Pass::contains(scene->passes, PASS_AO);
 
   if (have_uv_pass != prev_have_uv_pass) {
@@ -810,9 +808,9 @@ void Film::finalize_passes(Scene *scene, const bool use_denoise)
   scene->passes = std::move(new_passes);
 }
 
-uint Film::get_kernel_features(const Scene *scene) const
+uint64_t Film::get_kernel_features(const Scene *scene) const
 {
-  uint kernel_features = 0;
+  uint64_t kernel_features = 0;
 
   for (const Pass *pass : scene->passes) {
     if (!pass->is_written()) {

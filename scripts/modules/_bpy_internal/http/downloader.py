@@ -35,7 +35,10 @@ import multiprocessing
 import multiprocessing.connection
 import multiprocessing.process
 import os
+import pickle
+import queue
 import sys
+import threading
 import time
 import zlib  # For streaming gzip decompression.
 from collections.abc import Callable, Generator
@@ -46,7 +49,12 @@ from typing import Protocol, TypeAlias, Any, override
 # mypy   : Variable "multiprocessing.Event" is not valid as a type
 #          note: See https://mypy.readthedocs.io/en/stable/common_issues.html#variables-vs-type-aliases
 # Pylance: Variable not allowed in type expression
-from multiprocessing.synchronize import Event as EventClass
+try:
+    from multiprocessing.synchronize import Event as EventClass
+except ImportError:
+    # Android: Bionic has no POSIX named semaphores, so `_multiprocessing` is not built and this
+    # module cannot be imported. The thread-based context below provides `threading.Event` instead.
+    EventClass = threading.Event  # type: ignore[assignment, misc]
 
 import cattrs
 import cattrs.preconf.json
@@ -414,7 +422,69 @@ class ConditionalDownloader:
 #
 # So I (Sybren) figure it's better to test with the 'spawn' method,
 # which is also the current default on Windows and macOS.
-_mp_context = multiprocessing.get_context(method='spawn')
+class _ThreadConnection:
+    """One end of a `_ThreadContext.Pipe()`: the `multiprocessing.connection.Connection` calls the
+    downloader makes, over a pair of queues.
+
+    Objects are pickled across, as they would be between processes, so neither side ever holds a
+    reference to the other's objects.
+    """
+
+    def __init__(self, incoming: queue.Queue[bytes], outgoing: queue.Queue[bytes]) -> None:
+        self._incoming = incoming
+        self._outgoing = outgoing
+        self._pending: list[bytes] = []
+
+    def send(self, obj: Any) -> None:
+        self._outgoing.put(pickle.dumps(obj))
+
+    def poll(self, timeout: float = 0.0) -> bool:
+        if self._pending:
+            return True
+        try:
+            item = self._incoming.get(timeout=timeout) if timeout > 0 else self._incoming.get_nowait()
+        except queue.Empty:
+            return False
+        self._pending.append(item)
+        return True
+
+    def recv(self) -> Any:
+        item = self._pending.pop(0) if self._pending else self._incoming.get()
+        return pickle.loads(item)
+
+    def close(self) -> None:
+        pass
+
+
+class _ThreadContext:
+    """The parts of a `multiprocessing` context the BackgroundDownloader uses, on threads.
+
+    For Android, where the 'spawn' context cannot work: there is no `_multiprocessing`, and no
+    executable to re-run for a child -- Blender is a shared library inside the app's process, and
+    Android does not run binaries from an app's own storage. The downloader's background side never
+    touches `bpy`, and already runs its own download threads, so it runs as one more thread here.
+    """
+
+    @staticmethod
+    def Event() -> threading.Event:
+        return threading.Event()
+
+    @staticmethod
+    def Pipe(duplex: bool = True) -> tuple[_ThreadConnection, _ThreadConnection]:
+        a_to_b: queue.Queue[bytes] = queue.Queue()
+        b_to_a: queue.Queue[bytes] = queue.Queue()
+        return _ThreadConnection(b_to_a, a_to_b), _ThreadConnection(a_to_b, b_to_a)
+
+    @staticmethod
+    def Process(name: str, target: Callable[..., None], args: tuple[Any, ...],
+                daemon: bool = True) -> threading.Thread:
+        return threading.Thread(name=name, target=target, args=args, daemon=daemon)
+
+
+if sys.platform == "android":
+    _mp_context: Any = _ThreadContext()
+else:
+    _mp_context = multiprocessing.get_context(method='spawn')
 
 
 @dataclasses.dataclass
@@ -989,7 +1059,7 @@ def _download_queued_items(
     in_flight_downloads = RequestDescriptionCounter()
 
     # Cancellations of currently-downloading downloads, that still have to be processed by their downloader thread.
-    # These requests can be safely requeued (for the same or another worker), but of course the running one will be
+    # These requests can be safely re-queued (for the same or another worker), but of course the running one will be
     # cancelled and the new request will start from scratch.
     in_flight_cancellations = RequestDescriptionCounter()
 
@@ -1111,7 +1181,7 @@ def _download_queued_items(
         unqueued = unqueue_request(request_to_cancel)
 
         if request_to_cancel in in_flight_downloads:
-            # Only queue cancelation for already-in-flight downloads, as the item will only be popped off the cancel
+            # Only queue cancellation for already-in-flight downloads, as the item will only be popped off the cancel
             # queue when a worker is done with it. Without a worker thread, the item would be queued indefinitely,
             # interfering with future queues of the same download.
             cancel_queue.add(request_to_cancel)
@@ -1565,7 +1635,7 @@ class MetadataProviderFilesystem(MetadataProvider):
             # need to do a conditional download of a zero-bytes file. It is more
             # likely that something went wrong and a file got truncated.
             #
-            # And even if the file is of the correct size, non-conditinally
+            # And even if the file is of the correct size, non-conditionally
             # doing the same request for the empty file will require less data
             # than including the headers necessary for a conditional download.
             return False
@@ -1878,7 +1948,12 @@ def _cleanup_main_file_attribute() -> Generator[None]:
     # that will cause problems. Python dunder variables like this can
     # trigger all kinds of unknown magics, so they should be left alone
     # as much as possible.
-    main_module_file: str = getattr(main_module, '__file__', '') or ''
+    try:
+        main_module_file: str = getattr(main_module, '__file__')
+    except AttributeError:
+        # No __main__.__file__ is fine.
+        yield
+        return
 
     # Blender text datablocks don't exist on disk, and also in some Python
     # invocations from the C++ code there is a non-path string in the `__file__`

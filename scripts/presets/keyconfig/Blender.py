@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 import os
+import sys
 import bpy
 from bpy.props import (
     BoolProperty,
@@ -238,7 +239,10 @@ class Prefs(bpy.types.KeyConfigPreferences):
         description=(
             "Navigate into folders by clicking on them once instead of twice"
         ),
-        default=False,
+        # Touch: on by default on Android. A double tap only counts when both taps land within a
+        # few pixels and inside the double click time, which a finger rarely manages, so opening a
+        # folder took several attempts.
+        default=(sys.platform == "android"),
         update=update_fn,
     )
 
