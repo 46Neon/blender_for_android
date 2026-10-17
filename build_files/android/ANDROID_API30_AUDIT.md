@@ -16,6 +16,11 @@ change.
   install on Android 11.
 - Fast deploy now defaults to DEX API 30, and the API-30 env default is used by
   the normal build, dependency build, APK packager, and toolchain smoke test.
+- The NDK legacy `android.toolchain.cmake` deliberately reports
+  `CMAKE_SYSTEM_VERSION=1` to inhibit CMake's built-in Android NDK handling.
+  This is not the selected OS API: `ANDROID_PLATFORM=android-30`, the emitted
+  compiler target `aarch64-none-linux-android30`, and API-30 sysroot establish
+  the actual native minimum. See the [NDK toolchain source](https://android.googlesource.com/platform/ndk/+/master/build/cmake/android-legacy.toolchain.cmake).
 - Default build output is isolated at `../blender_build_android_api30` (or
   `../blender_build_android_api${ANDROID_API}` when overridden), including the
   Android CMake platform fallback. The dependency prefix is marked with

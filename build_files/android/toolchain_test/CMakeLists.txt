@@ -12,7 +12,10 @@ project(blender_android_toolchain_test CXX)
 
 message(STATUS "System name    : ${CMAKE_SYSTEM_NAME}")
 message(STATUS "Android ABI    : ${CMAKE_ANDROID_ARCH_ABI}")
-message(STATUS "Android API    : ${CMAKE_SYSTEM_VERSION}")
+# The NDK legacy toolchain sets CMAKE_SYSTEM_VERSION=1 deliberately to disable
+# CMake's own NDK handling. ANDROID_PLATFORM is the actual min-API setting.
+message(STATUS "Android platform/API : ${ANDROID_PLATFORM}")
+message(STATUS "CMake system version : ${CMAKE_SYSTEM_VERSION} (NDK sentinel)")
 message(STATUS "C++ compiler   : ${CMAKE_CXX_COMPILER}")
 
 if(NOT ANDROID)
