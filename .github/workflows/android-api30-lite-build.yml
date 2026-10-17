@@ -123,6 +123,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          source build_files/android/env.sh
+          test -x "$ANDROID_LLVM_BIN/llvm-readelf"
           APK="$BUILD_BASE/android_apk_stage_lite/blender-lite.apk"
           test -s "$APK"
           "$ANDROID_HOME/build-tools/35.0.1/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/api30-lite-badging.txt"
