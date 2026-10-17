@@ -15,12 +15,21 @@ case "$CONFIG" in lite|full) ;; *) echo "usage: $0 [lite|full]" >&2; exit 1;; es
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-# Drop any leaked Android Studio SDK/NDK paths so env.sh picks the Homebrew ones
-# (Studio's SDK lacks our build-tools/NDK version).
-unset ANDROID_HOME ANDROID_NDK_ROOT ANDROID_NDK_HOME
+# Honor explicit SDK/NDK paths supplied by CI or the caller. To use env.sh's
+# host-specific defaults (Homebrew on macOS), leave these variables unset there.
 # shellcheck source=/dev/null
 source "$SCRIPT_DIR/env.sh"
 cd "$REPO_ROOT"
+
+if [ ! -f "$ANDROID_TOOLCHAIN_FILE" ]; then
+  echo "[build_apk] ERROR: missing Android toolchain file: $ANDROID_TOOLCHAIN_FILE" >&2
+  exit 1
+fi
+NINJA="$(command -v ninja || true)"
+if [ -z "$NINJA" ]; then
+  echo "[build_apk] ERROR: ninja not found in PATH" >&2
+  exit 1
+fi
 
 # Canonical path: CMake records a resolved one, and comparing an unresolved
 # path against it made drop_stale_cache wipe the build dir on every run.
@@ -48,14 +57,14 @@ echo "=== [$CONFIG] host codegen tools ==="
 # built with exactly the same WITH_* flags as the target or its generated RNA
 # silently lacks registration callbacks (for example Operator/Gizmo with Python).
 # Keep the GUI out since the host build only supplies generators.
-cmake -S . -B "$HOST" -G Ninja -C "$FEATURES" -DWITH_CROSSCOMPILED_TOOLS=OFF \
+cmake -S . -B "$HOST" -G Ninja -DCMAKE_MAKE_PROGRAM="$NINJA" -C "$FEATURES" -DWITH_CROSSCOMPILED_TOOLS=OFF \
   -DCMAKE_C_COMPILER="$ANDROID_HOST_CC" -DCMAKE_CXX_COMPILER="$ANDROID_HOST_CXX" \
   -DWITH_HEADLESS=ON -DWITH_X11_XINPUT=OFF -DWITH_AUDASPACE=OFF \
   -DCMAKE_BUILD_RPATH="$REPO_ROOT/lib/linux_x64/tbb/lib"
 ninja -C "$HOST" makesdna makesrna datatoc msgfmt shader_tool
 
 echo "=== [$CONFIG] configure + build libblender.so ==="
-cmake -S . -B "$BUILD" -G Ninja \
+cmake -S . -B "$BUILD" -G Ninja -DCMAKE_MAKE_PROGRAM="$NINJA" \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_TOOLCHAIN_FILE" \
   -DANDROID_ABI="$ANDROID_ABI" -DANDROID_PLATFORM="android-$ANDROID_API" \
   -DBUILD_BASE="$BUILD_BASE" -DCMAKE_BUILD_TYPE=Release \
