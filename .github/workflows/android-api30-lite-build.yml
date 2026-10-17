@@ -73,10 +73,10 @@ jobs:
           git config --global credential.helper '!f() { echo username=; echo password=; }; f'
           git config lfs.url 'https://projects.blender.org/blender/blender.git/info/lfs'
           MISSING_LFS_OID='38e9b314b65b3a16d005b0a976dbf3f01d05adb0b3e7fd147aca26191eab55ab'
-          if ! git lfs ls-files --long | grep -F "$MISSING_LFS_OID"; then
-            echo "The failed LFS OID is not present in the root index; inspect submodule/source revision." >&2
-          fi
-          GIT_TERMINAL_PROMPT=0 git lfs pull
+          GIT_TERMINAL_PROMPT=0 git lfs pull --exclude='release/datafiles/splash.png'
+          curl --silent --output "$RUNNER_TEMP/blender-splash.png" 'https://media.githubusercontent.com/media/46Neon/blender_for_android/82ff5e77e2442921045df9a52ae9f41dd3d8f7b1/release/datafiles/splash.png'
+          printf '%s  %s\n' "$MISSING_LFS_OID" "$RUNNER_TEMP/blender-splash.png" | sha256sum --check
+          install -D -m 644 "$RUNNER_TEMP/blender-splash.png" release/datafiles/splash.png
           git -c submodule.lib/linux_x64.update=checkout submodule update --init lib/linux_x64
           git -C lib/linux_x64 config lfs.url 'https://projects.blender.org/blender/lib-linux_x64.git/info/lfs'
           GIT_TERMINAL_PROMPT=0 git -C lib/linux_x64 lfs pull
