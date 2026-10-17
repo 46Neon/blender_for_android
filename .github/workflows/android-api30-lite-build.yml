@@ -141,3 +141,12 @@ jobs:
           done
           echo "Verified ${#LIBS[@]} arm64 native libraries in $APK"
           du -h "$APK" "$RUNNER_TEMP/api30-lite-apk/lib/arm64-v8a/libblender.so"
+
+      - name: Upload validated Blender lite APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-lite-api30-arm64
+          path: ${{ env.BUILD_BASE }}/android_apk_stage_lite/blender-lite.apk
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
