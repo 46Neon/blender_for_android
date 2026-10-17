@@ -121,7 +121,7 @@ jobs:
         with:
           python-version: '3.13'
 
-      - name: Build patched OIDN with TBB and ISPC for API 30 arm64
+      - name: Build OIDN and Draco for API 30 arm64
         shell: bash
         run: |
           export ANDROID_HOME="${ANDROID_HOME:-${ANDROID_SDK_ROOT:?Android SDK root not set}}"
@@ -133,7 +133,7 @@ jobs:
           source build_files/android/env.sh
           python3.13 --version
           BUILD_BASE="$RUNNER_TEMP/blender_build_android_api30_zlib" \
-            bash build_files/android/deps/build.sh tbb ispc oidn
+            bash build_files/android/deps/build.sh tbb ispc oidn draco
           LIBDIR="$RUNNER_TEMP/blender_build_android_api30_zlib/lib/android_arm64"
           OIDN="$LIBDIR/openimagedenoise/lib/libOpenImageDenoise_core.a"
           test -s "$OIDN"
@@ -144,6 +144,9 @@ jobs:
             exit 1
           fi
           "$ANDROID_LLVM_BIN/llvm-nm" -u "$OIDN" | grep -E 'sched_(get|set)affinity'
+          DRACO="$LIBDIR/draco/lib/libdraco.a"
+          test -s "$DRACO"
+          "$ANDROID_LLVM_BIN/llvm-objdump" -f "$DRACO" | grep -i aarch64 >/dev/null
           MARKER="$LIBDIR/.android-build-config"
           printf 'abi=arm64-v8a\napi=30\nndk=28.2.13676358\n' > "$RUNNER_TEMP/expected-oidn-build-config"
           cmp "$RUNNER_TEMP/expected-oidn-build-config" "$MARKER"
