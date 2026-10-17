@@ -370,10 +370,14 @@ build_minizipng() {
   local v; v="$(dep_version MINIZIPNG_VERSION)"
   fetch "minizip-ng-$v.tar.gz" "https://github.com/zlib-ng/minizip-ng/archive/$v.tar.gz"
   local src; src="$(extract "minizip-ng-$v.tar.gz" minizipng)"
+  # PPMd is an optional ZIP codec built as a separate static archive. The
+  # OpenColorIO find-module integration below accepts a single direct library
+  # path, so keep this codec off until that integration can propagate its
+  # additional static dependency. Zlib/Deflate support remains enabled.
   cmake_install "$src" minizipng \
     -DMZ_FETCH_LIBS=OFF -DMZ_LIBCOMP=OFF -DMZ_PKCRYPT=OFF -DMZ_WZAES=OFF \
     -DMZ_OPENSSL=OFF -DMZ_SIGNING=OFF -DMZ_LZMA=OFF -DMZ_ZSTD=OFF \
-    -DMZ_BZIP2=OFF -DMZ_ICONV=OFF
+    -DMZ_BZIP2=OFF -DMZ_ICONV=OFF -DMZ_PPMD=OFF
 }
 
 build_opencolorio() {
@@ -381,23 +385,16 @@ build_opencolorio() {
   fetch "opencolorio-$v.tar.gz" "https://github.com/AcademySoftwareFoundation/OpenColorIO/archive/v$v.tar.gz"
   local src; src="$(extract "opencolorio-$v.tar.gz" opencolorio)"
   # Python bindings off until Python is cross-compiled; use our harvested deps.
-  # OCIO's find module searches for minizip-ng by name and gives up, so pass
-  # direct library paths. minizip-ng builds PPMd as a separate static library;
-  # include it here because the direct libminizip.a path loses that transitive
-  # dependency when OpenColorIO links its shared library.
-  local minizip_lib="$LIBDIR/minizipng/lib/libminizip.a"
-  local ppmd_lib="$LIBDIR/minizipng/lib/libppmd.a"
-  if [ ! -s "$ppmd_lib" ]; then
-    echo "[deps] ERROR: minizip-ng PPMd archive is missing: $ppmd_lib" >&2
-    return 1
-  fi
+  # minizip-ng installs itself as libminizip.a, but OCIO's find module searches
+  # for the name minizip-ng and gives up. Point it at the file directly, which
+  # the module documents and which does not depend on the CMake version.
   cmake_install "$src" opencolorio \
     -DOCIO_INSTALL_EXT_PACKAGES=NONE \
     -DOCIO_BUILD_APPS=OFF -DOCIO_BUILD_PYTHON=OFF -DOCIO_BUILD_NUKE=OFF \
     -DOCIO_BUILD_JAVA=OFF -DOCIO_BUILD_DOCS=OFF -DOCIO_BUILD_TESTS=OFF \
     -DOCIO_BUILD_GPU_TESTS=OFF -DOCIO_USE_SSE=OFF \
     -Dminizip-ng_ROOT="$LIBDIR/minizipng" -Dpystring_ROOT="$LIBDIR/pystring" \
-    -Dminizip-ng_LIBRARY="$minizip_lib;$ppmd_lib" \
+    -Dminizip-ng_LIBRARY="$LIBDIR/minizipng/lib/libminizip.a" \
     -Dminizip-ng_INCLUDE_DIR="$LIBDIR/minizipng/include/minizip"
 }
 
