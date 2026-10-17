@@ -76,8 +76,8 @@ jobs:
           grep -F "$ANDROID_NDK_ROOT" "$BUILD/CMakeCache.txt"
           ZLIB="$LIBDIR/zlib/lib/libz.so"
           test -s "$ZLIB"
-          "$ANDROID_LLVM_BIN/llvm-readelf" -h "$ZLIB" | grep -F 'Class: ELF64'
-          "$ANDROID_LLVM_BIN/llvm-readelf" -h "$ZLIB" | grep -F 'Machine: AArch64'
+          "$ANDROID_LLVM_BIN/llvm-readelf" -h "$ZLIB" | grep -E 'Class:[[:space:]]+ELF64'
+          "$ANDROID_LLVM_BIN/llvm-readelf" -h "$ZLIB" | grep -E 'Machine:[[:space:]]+AArch64'
           MARKER="$LIBDIR/.android-build-config"
           printf 'abi=arm64-v8a\napi=30\nndk=28.2.13676358\n' > "$RUNNER_TEMP/expected-zlib-build-config"
           cmp "$RUNNER_TEMP/expected-zlib-build-config" "$MARKER"
