@@ -1,0 +1,132 @@
+name: Android API 30 lite native build
+
+on:
+  push:
+    branches: [android-11-api-30]
+    paths:
+      - '.github/workflows/android-api30-lite-build.yml'
+      - 'build_files/android/**'
+      - 'build_files/build_environment/cmake/versions.cmake'
+      - 'build_files/cmake/platform/platform_android.cmake'
+      - 'intern/draco_bridge/**'
+      - 'intern/meshoptimizer_bridge/**'
+      - 'source/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  api30-lite-build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools'
+
+      - name: Install host tools and Android SDK/NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang-18 lld-18 cmake ninja-build meson pkgconf patchelf \
+            git-lfs autoconf automake libtool libtool-bin flex bison yasm nasm zip unzip \
+            libffi-dev libssl-dev zlib1g-dev libbz2-dev liblzma-dev libsqlite3-dev \
+            libreadline-dev libncurses-dev uuid-dev
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:?Android SDK root not set}}"
+          sdkmanager \
+            'platforms;android-35' \
+            'build-tools;35.0.1' \
+            'ndk;28.2.13676358'
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo 'ANDROID_NDK_VERSION=28.2.13676358' >> "$GITHUB_ENV"
+          echo 'ANDROID_ABI=arm64-v8a' >> "$GITHUB_ENV"
+          echo 'ANDROID_API=30' >> "$GITHUB_ENV"
+          echo 'ANDROID_TARGET_API=34' >> "$GITHUB_ENV"
+          echo "BUILD_BASE=$RUNNER_TEMP/blender_build_android_api30_lite" >> "$GITHUB_ENV"
+          cmake --version
+          clang-18 --version
+          python3.13 --version
+          test -f "$SDK/ndk/28.2.13676358/source.properties"
+
+      - name: Fetch Blender LFS assets and Linux host libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          git lfs install --local
+          git config --global credential.helper '!f() { echo username=; echo password=; }; f'
+          git config lfs.url 'https://projects.blender.org/blender/blender.git/info/lfs'
+          GIT_TERMINAL_PROMPT=0 git lfs pull
+          git -c submodule.lib/linux_x64.update=checkout submodule update --init lib/linux_x64
+          git -C lib/linux_x64 config lfs.url 'https://projects.blender.org/blender/lib-linux_x64.git/info/lfs'
+          GIT_TERMINAL_PROMPT=0 git -C lib/linux_x64 lfs pull
+          test -d lib/linux_x64/tbb/lib
+          git submodule status lib/linux_x64
+          df -h . "$RUNNER_TEMP"
+
+      - name: Build the API-30 lite dependency closure from a clean prefix
+        shell: bash
+        run: |
+          set -euo pipefail
+          source build_files/android/env.sh
+          test "$ANDROID_API" = 30
+          test "$ANDROID_ABI" = arm64-v8a
+          grep -F 'Pkg.Revision = 28.2.13676358' "$ANDROID_NDK_ROOT/source.properties"
+          test ! -e "$BUILD_BASE/lib/android_arm64/.android-build-config"
+          bash build_files/android/deps/build.sh \
+            zlib zstd deflate imath fmt tbb openexr png pugixml jpeg brotli freetype \
+            harfbuzz webp tiff openjpeg expat yamlcpp blosc pystring minizipng \
+            opencolorio robinmap openimageio sqlite libffi openssl lzma bzip2 python \
+            eigen sse2neon fribidi vulkan_headers meshoptimizer shaderc draco
+          LIBDIR="$BUILD_BASE/lib/android_arm64"
+          printf 'abi=arm64-v8a\napi=30\nndk=28.2.13676358\n' > "$RUNNER_TEMP/expected-api30-prefix"
+          cmp "$RUNNER_TEMP/expected-api30-prefix" "$LIBDIR/.android-build-config"
+          test ! -d "$LIBDIR/python/lib/python3.13/site-packages/numpy"
+          cat "$LIBDIR/.android-build-config"
+
+      - name: Build and package Blender lite for API 30
+        shell: bash
+        run: |
+          set -euo pipefail
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          source build_files/android/env.sh
+          test "$ANDROID_API" = 30
+          test "$ANDROID_ABI" = arm64-v8a
+          BUILD_BASE="$BUILD_BASE" bash build_files/android/build_apk.sh lite
+
+      - name: Verify the real APK and every packaged native ELF
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$BUILD_BASE/android_apk_stage_lite/blender-lite.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.1/aapt" dump badging "$APK" | tee "$RUNNER_TEMP/api30-lite-badging.txt"
+          grep -F "sdkVersion:'30'" "$RUNNER_TEMP/api30-lite-badging.txt"
+          grep -F "targetSdkVersion:'34'" "$RUNNER_TEMP/api30-lite-badging.txt"
+          mkdir -p "$RUNNER_TEMP/api30-lite-apk"
+          unzip -q "$APK" 'lib/arm64-v8a/*.so' -d "$RUNNER_TEMP/api30-lite-apk"
+          test -s "$RUNNER_TEMP/api30-lite-apk/lib/arm64-v8a/libblender.so"
+          shopt -s nullglob
+          LIBS=("$RUNNER_TEMP/api30-lite-apk"/lib/arm64-v8a/*.so)
+          test "${#LIBS[@]}" -gt 0
+          for LIB in "${LIBS[@]}"; do
+            "$ANDROID_LLVM_BIN/llvm-readelf" -h "$LIB" | grep -E 'Machine:.*AArch64' >/dev/null
+          done
+          echo "Verified ${#LIBS[@]} arm64 native libraries in $APK"
+          du -h "$APK" "$RUNNER_TEMP/api30-lite-apk/lib/arm64-v8a/libblender.so"

@@ -18,9 +18,9 @@ set(WITH_OPENMP OFF CACHE BOOL "" FORCE)
 set(WITH_HYDRA OFF CACHE BOOL "" FORCE)
 set(WITH_GMP OFF CACHE BOOL "" FORCE)
 set(WITH_CODEC_SNDFILE OFF CACHE BOOL "" FORCE)
-# Draco-compressed glTF. The dependency is not cross-compiled yet;
-# see ANDROID_MISSING_FEATURES.md.
-set(WITH_DRACO OFF CACHE BOOL "" FORCE)
+# The Android dependency builder cross-compiles the static Draco library.
+# Both APK profiles build a glTF decoder bridge, so expose the package to CMake.
+set(WITH_DRACO ON CACHE BOOL "" FORCE)
 # New in 5.3, and not cross-compiled for Android yet: Jolt Physics, and
 # OpenTimelineIO for the sequencer's .otio import/export. Both default ON
 # upstream and would fail the build without their libraries.
