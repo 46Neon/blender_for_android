@@ -53,6 +53,16 @@ change.
   been established here. The `full` profile's resource use may also exceed what
   a lower/midrange phone can handle; `lite` should be evaluated separately.
 
+## Focused CI verification (2026-10-17)
+
+[GitHub Actions run 38993070899](https://github.com/46Neon/blender_for_android/actions/runs/38993070899) passed on this branch with NDK `28.2.13676358`, ABI `arm64-v8a`, and native minimum API 30:
+
+- Native CMake/NDK smoke test and API-30 dependency builds for zlib, zstd, and libdeflate passed; the shared libraries were checked as ELF64/AArch64 and the dependency prefix marker matched ABI/API/NDK.
+- oneTBB and host ISPC installed, and patched Open Image Denoise compiled and linked its static core and CPU-device archives. The archive checks found `sched_getaffinity`/`sched_setaffinity` and no undefined `pthread_getaffinity_np`/`pthread_setaffinity_np` references.
+- Gradle assembled the API-30 **shell test APK** and confirmed `minSdkVersion=30`, `targetSdkVersion=34`.
+
+This is focused component evidence only. The APK has no Blender native payload; the run did not compile `libblender.so`, package Blender, inspect the complete transitive library set, install an APK, or test in an emulator/physical device. It does not certify Blender/API-30 compatibility.
+
 ## Required verification before claiming API 30 support
 
 1. Build all dependencies from scratch in the isolated API-30 `BUILD_BASE`;
@@ -74,6 +84,7 @@ change.
 
 Static source review and consistency checks cover the Android environment,
 NDK/dependency scripts, Gradle and manual APK package paths, fast deploy,
-manifest/storage code, and the Android build instructions. No Android SDK/NDK
-build, APK inspection, emulator test, or physical-device test has been run in
-this environment. API 30 compatibility therefore remains **unverified**.
+manifest/storage code, and Android build instructions. The focused CI evidence
+above has passed, but no complete Blender build/APK, full transitive-symbol
+audit, APK install, emulator test, or physical-device test has been completed.
+API 30 compatibility therefore remains **unverified**.
