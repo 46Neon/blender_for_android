@@ -381,16 +381,23 @@ build_opencolorio() {
   fetch "opencolorio-$v.tar.gz" "https://github.com/AcademySoftwareFoundation/OpenColorIO/archive/v$v.tar.gz"
   local src; src="$(extract "opencolorio-$v.tar.gz" opencolorio)"
   # Python bindings off until Python is cross-compiled; use our harvested deps.
-  # minizip-ng installs itself as libminizip.a, but OCIO's find module searches
-  # for the name minizip-ng and gives up. Point it at the file directly, which
-  # the module documents and which does not depend on the CMake version.
+  # OCIO's find module searches for minizip-ng by name and gives up, so pass
+  # direct library paths. minizip-ng builds PPMd as a separate static library;
+  # include it here because the direct libminizip.a path loses that transitive
+  # dependency when OpenColorIO links its shared library.
+  local minizip_lib="$LIBDIR/minizipng/lib/libminizip.a"
+  local ppmd_lib="$LIBDIR/minizipng/lib/libppmd.a"
+  if [ ! -s "$ppmd_lib" ]; then
+    echo "[deps] ERROR: minizip-ng PPMd archive is missing: $ppmd_lib" >&2
+    return 1
+  fi
   cmake_install "$src" opencolorio \
     -DOCIO_INSTALL_EXT_PACKAGES=NONE \
     -DOCIO_BUILD_APPS=OFF -DOCIO_BUILD_PYTHON=OFF -DOCIO_BUILD_NUKE=OFF \
     -DOCIO_BUILD_JAVA=OFF -DOCIO_BUILD_DOCS=OFF -DOCIO_BUILD_TESTS=OFF \
     -DOCIO_BUILD_GPU_TESTS=OFF -DOCIO_USE_SSE=OFF \
     -Dminizip-ng_ROOT="$LIBDIR/minizipng" -Dpystring_ROOT="$LIBDIR/pystring" \
-    -Dminizip-ng_LIBRARY="$LIBDIR/minizipng/lib/libminizip.a" \
+    -Dminizip-ng_LIBRARY="$minizip_lib;$ppmd_lib" \
     -Dminizip-ng_INCLUDE_DIR="$LIBDIR/minizipng/include/minizip"
 }
 
