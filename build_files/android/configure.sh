@@ -39,7 +39,7 @@ configure() {
 case "$TARGET" in
   test)
     SRC="$SCRIPT_DIR/toolchain_test"
-    BUILD="$REPO_ROOT/../blender_build_android/build_android_toolchain_test"
+    BUILD="${BUILD_BASE:-$ANDROID_BUILD_BASE_DEFAULT}/build_android_toolchain_test"
     configure "$SRC" "$BUILD"
     cmake --build "$BUILD" -v
     echo

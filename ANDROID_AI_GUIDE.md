@@ -60,12 +60,12 @@ above are `full`.
 | JDK | 17. Needed for the APK tooling. |
 | Disk | Around 60 GB for the dependency prefix, the build trees and the archived APKs. |
 
-Target API levels: minimum 31 (Android 12), compiled against 34.
+Target API levels: minimum 30 (Android 11), targetSdk 34, compiled against Android 35. API-30 build and device verification is pending; see the [API-30 audit](build_files/android/ANDROID_API30_AUDIT.md).
 
 ## Layout
 
 Everything the build produces lives outside the checkout, under one directory
-called `BUILD_BASE`:
+called `BUILD_BASE` (by default `../blender_build_android_api30` for API 30; override explicitly only with a compatible dependency prefix):
 
 ```
 $BUILD_BASE/lib/android_arm64          cross compiled dependencies
@@ -76,8 +76,7 @@ $BUILD_BASE/apk                        archived APKs, newest linked as <cfg>-lat
 ```
 
 `<cfg>` is `full` or `lite`. `build.py` resolves `BUILD_BASE` from an explicit
-`--build-base`, then the environment, then the first candidate that actually
-holds `lib/android_arm64`, and stops with a clear message when it finds nothing.
+`--build-base`, then the environment, then the API-specific default (`blender_build_android_api30` unless `ANDROID_API` is overridden); it does not auto-detect legacy unversioned caches.
 
 ## Dependencies
 
@@ -466,7 +465,7 @@ first. The general form: a scale applies to a scope, so check what else is in th
 | --- | --- |
 | Open Image Denoise 2.5.0 | [android_features_full.cmake](build_files/android/android_features_full.cmake), [deps/build.sh](build_files/android/deps/build.sh), [platform_android.cmake](build_files/cmake/platform/platform_android.cmake) |
 | Fluid simulation, Manifold boolean solver, motion tracking, PDF export, Ocean modifier, path guiding | [android_features_full.cmake](build_files/android/android_features_full.cmake), [deps/build.sh](build_files/android/deps/build.sh) |
-| Native audio output in the `full` build. Audaspace was already compiled but had no device capable of sending its mix to Android; `AAudioDevice` now registers as a static Android-only backend with the highest device priority and links the NDK's platform `libaaudio.so`, so it needs neither a dependency recipe nor a feature option. AAudio exists since API 26 and this port already requires API 31, so no runtime fallback is needed. Its callback mixes directly into the shared output stream, writes silence while stopped, accepts 16-bit PCM or falls back to 32-bit float, and records the rate, channel count and format AAudio actually opened so sound does not play at the wrong pitch. The non-low-latency performance mode is deliberate: Blender mixes arbitrary sources and effects, and a slightly larger buffer is safer than gaps from missing a real-time deadline. Route changes such as unplugging headphones or connecting Bluetooth reach an error callback that deliberately does no recovery work because AAudio forbids closing or reopening a stream there; automatic recovery is not implemented, so output remains stopped until Blender recreates the device. The `lite` build still sets `WITH_AUDASPACE=OFF` | [CMakeLists.txt](extern/audaspace/CMakeLists.txt), [AAudioDevice.h](extern/audaspace/plugins/aaudio/AAudioDevice.h), [AAudioDevice.cpp](extern/audaspace/plugins/aaudio/AAudioDevice.cpp) `AAudioDevice()`, `mix_callback()`, `playing()`, `error_callback()` and `AAudioDeviceFactory::getPriority()`, [android_features_lite.cmake](build_files/android/android_features_lite.cmake) |
+| Native audio output in the `full` build. Audaspace was already compiled but had no device capable of sending its mix to Android; `AAudioDevice` now registers as a static Android-only backend with the highest device priority and links the NDK's platform `libaaudio.so`, so it needs neither a dependency recipe nor a feature option. AAudio exists since API 26, below this port's API-30 minimum, so no runtime fallback is needed. Its callback mixes directly into the shared output stream, writes silence while stopped, accepts 16-bit PCM or falls back to 32-bit float, and records the rate, channel count and format AAudio actually opened so sound does not play at the wrong pitch. The non-low-latency performance mode is deliberate: Blender mixes arbitrary sources and effects, and a slightly larger buffer is safer than gaps from missing a real-time deadline. Route changes such as unplugging headphones or connecting Bluetooth reach an error callback that deliberately does no recovery work because AAudio forbids closing or reopening a stream there; automatic recovery is not implemented, so output remains stopped until Blender recreates the device. The `lite` build still sets `WITH_AUDASPACE=OFF` | [CMakeLists.txt](extern/audaspace/CMakeLists.txt), [AAudioDevice.h](extern/audaspace/plugins/aaudio/AAudioDevice.h), [AAudioDevice.cpp](extern/audaspace/plugins/aaudio/AAudioDevice.cpp) `AAudioDevice()`, `mix_callback()`, `playing()`, `error_callback()` and `AAudioDeviceFactory::getPriority()`, [android_features_lite.cmake](build_files/android/android_features_lite.cmake) |
 | Exact boolean solver, through GMP | [deps/build.sh](build_files/android/deps/build.sh), [platform_android.cmake](build_files/cmake/platform/platform_android.cmake) |
 | Draco compressed glTF | [deps/build.sh](build_files/android/deps/build.sh), [package.sh](build_files/android/apk/package.sh) |
 | Internet access: the permission, a bundled certificate store, and an interpreter the extension system can run | [AndroidManifest.xml](build_files/android/apk/app/src/main/AndroidManifest.xml), [BlenderActivity.java](build_files/android/apk/app/src/main/java/org/blender/blender/BlenderActivity.java), [python/intern/CMakeLists.txt](source/blender/python/intern/CMakeLists.txt), [deps/build.sh](build_files/android/deps/build.sh) |

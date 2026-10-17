@@ -1,11 +1,11 @@
 # Building Blender for Android from scratch
 
 End-to-end guide to reproduce the Android arm64 build on an Apple-Silicon Mac.
-Target: Android 12+ (minSdk 31), built against Android 14 (targetSdk 34).
+Target: Android 11+ (minSdk 30), targetSdk 34, compiled against Android 35. This configuration has not yet been verified by a complete API-30 build or device run; see the [API-30 audit](ANDROID_API30_AUDIT.md).
 
 > Everything installs into a sibling of the repo:
-> `../blender_build_android/lib/android_arm64` (harvested deps), `../blender_build_android/build_android_<cfg>` (Blender),
-> `../blender_build_android/build_host_tools_<cfg>` (native codegen tools), `../blender_build_android/android_apk_stage_<cfg>`
+> `../blender_build_android_api30/lib/android_arm64` (harvested deps), `../blender_build_android_api30/build_android_<cfg>` (Blender),
+> `../blender_build_android_api30/build_host_tools_<cfg>` (native codegen tools), `../blender_build_android_api30/android_apk_stage_<cfg>`
 > (APK stage), where `<cfg>` is `full` or `lite`.
 
 ## Build configurations
@@ -39,7 +39,7 @@ build_files/android/build_apk.sh full     # or: lite
 ```
 
 builds the config-matched host tools, cross-compiles `libblender.so`, and
-packages `../blender_build_android/android_apk_stage_<cfg>/blender-<cfg>.apk`. The manual steps below
+packages `../blender_build_android_api30/android_apk_stage_<cfg>/blender-<cfg>.apk`. The manual steps below
 show what it does under the hood.
 
 ---
@@ -78,7 +78,7 @@ sdkmanager "ndk;28.2.13676358" "platform-tools" \
 ```
 
 The environment (NDK path, ABI, API levels) lives in
-`build_files/android/env.sh` - everything below sources it.
+`build_files/android/env.sh` - everything below sources it. `ANDROID_API` defaults to 30; `ANDROID_TARGET_API=34` and compile SDK 35 are separate. The default `BUILD_BASE` is API-specific, and the dependency prefix stores an ABI/API/NDK marker; an existing unmarked prefix is refused rather than reused.
 
 ---
 
@@ -137,10 +137,10 @@ x265 vpx x264 ffmpeg xml2 eigen sse2neon fribidi abseil vulkan_headers
 meshoptimizer shaderc numpy usd llvm rubberband
 ```
 
-Each installs to `../blender_build_android/lib/android_arm64/<name>`; verify with:
+Each installs to `../blender_build_android_api30/lib/android_arm64/<name>`; verify with:
 
 ```bash
-$ANDROID_LLVM_BIN/llvm-objdump -f ../blender_build_android/lib/android_arm64/<name>/lib/lib*.so | grep aarch64
+$ANDROID_LLVM_BIN/llvm-objdump -f ../blender_build_android_api30/lib/android_arm64/<name>/lib/lib*.so | grep aarch64
 ```
 
 Notes / gotchas (all handled by build.sh):
@@ -165,9 +165,9 @@ datatoc, msgfmt). These must run on the host, so build them natively with the
 **same feature flags** as the target (else generated RNA/DNA mismatch):
 
 ```bash
-cmake -S . -B ../blender_build_android/build_host_tools -G Ninja \
+cmake -S . -B ../blender_build_android_api30/build_host_tools -G Ninja \
   -C build_files/android/android_features_full.cmake -DWITH_CROSSCOMPILED_TOOLS=OFF
-ninja -C ../blender_build_android/build_host_tools makesdna makesrna datatoc msgfmt shader_tool
+ninja -C ../blender_build_android_api30/build_host_tools makesdna makesrna datatoc msgfmt shader_tool
 ```
 
 ---
@@ -176,13 +176,13 @@ ninja -C ../blender_build_android/build_host_tools makesdna makesrna datatoc msg
 
 ```bash
 source build_files/android/env.sh
-cmake -S . -B ../blender_build_android/build_android_blender -G Ninja \
+cmake -S . -B ../blender_build_android_api30/build_android_blender -G Ninja \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_TOOLCHAIN_FILE" \
-  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-31
-ninja -C ../blender_build_android/build_android_blender blender
+  -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-30
+ninja -C ../blender_build_android_api30/build_android_blender blender
 ```
 
-Produces `../blender_build_android/build_android_blender/lib/libblender.so` (an arm64 shared library;
+Produces `../blender_build_android_api30/build_android_blender/lib/libblender.so` (an arm64 shared library;
 `platform_android.cmake` selects the shared-lib + NativeActivity path).
 
 ---
@@ -196,7 +196,7 @@ build_files/android/apk/package.sh
 This gathers `libblender.so` + all transitive `.so` deps (stripped), bundles the
 runtime payload (Python stdlib + numpy, `scripts/`, `datafiles/`) as
 `blender_runtime.zip`, compiles `BlenderActivity`, and assembles a debug-signed
-APK at `../blender_build_android/android_apk_stage_<cfg>/blender-<cfg>.apk`, sideloadable. Sizes:
+APK at `../blender_build_android_api30/android_apk_stage_<cfg>/blender-<cfg>.apk`, sideloadable. Sizes:
 **lite ≈ 115 MB**, **full ≈ 166 MB** (129 native libs vs 105).
 
 On first launch `BlenderActivity` extracts the runtime to
@@ -210,14 +210,14 @@ On first launch `BlenderActivity` extracts the runtime to
 
 **adb:**
 ```bash
-adb install -r ../blender_build_android/android_apk_stage/blender.apk
+adb install -r ../blender_build_android_api30/android_apk_stage/blender.apk
 adb shell am start -n org.blender.blender/.BlenderActivity
 adb logcat --pid=$(adb shell pidof org.blender.blender)
 ```
 
 **Android Studio (Run/Debug):** run `package.sh` once (to stage libs+assets),
 then open `build_files/android/apk` as a project. The gradle app module consumes
-`../blender_build_android/android_apk_stage/{lib,assets}` and can Run/Debug on a device or AVD.
+`../blender_build_android_api30/android_apk_stage/{lib,assets}` and can Run/Debug on a device or AVD.
 
 ---
 
@@ -240,7 +240,7 @@ build_files/android/build.py --disable-validation-layers   # when finished
 
 Adds ~27 MB to the APK and slows the app noticeably, so it is a debugging build
 only. The layer is downloaded once and cached in
-`../blender_build_android/validation-layers/`.
+`../blender_build_android_api30/validation-layers/`.
 
 Two messages are expected on a Vulkan 1.1 Adreno device and are not bugs:
 

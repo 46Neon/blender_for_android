@@ -1,4 +1,6 @@
-# Android dependency build — status
+# Android dependency build — historical status
+
+> This page records an earlier build attempt and is not evidence of API-30 validation. The current minimum is API 30 (Android 11), targetSdk 34; rebuild all dependencies in the API-specific `BUILD_BASE` and verify the complete APK/device path before claiming support. See [BUILDING.md](../BUILDING.md) and [ANDROID_API30_AUDIT.md](../ANDROID_API30_AUDIT.md).
 
 Run: `build_files/android/deps/build.sh <dep>`. Installs into
 `lib/android_arm64/<dep>` (a sibling of the repo). Versions come from
@@ -164,5 +166,5 @@ This is a dedicated multi-stage effort — do it as its own focused pass.
 Final-link fixes: pthread/rt stubs, TBB::tbbmalloc, volk VK_USE_PLATFORM_ANDROID_KHR.
 All deps done incl. Python+numpy, LLVM, USD(+python), OpenVDB, ffmpeg, OIIO,
 Cycles(NEON), Vulkan+shaderc, MaterialX, embree, OpenSubdiv.
-minSdk 31 (Android 12), targetSdk 34.
+minSdk 30 (Android 11), targetSdk 34. API-30 dependency and runtime verification is still pending.
 Next: build as libblender.so (NativeActivity) + APK packaging; strip binary.

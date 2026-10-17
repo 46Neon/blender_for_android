@@ -9,8 +9,9 @@
 # desktop-only features. Full configure is being brought up incrementally.
 
 if(NOT DEFINED BUILD_BASE)
-  # All Android build artifacts live under this sibling dir (see build_apk.sh).
-  set(BUILD_BASE "${CMAKE_SOURCE_DIR}/../blender_build_android")
+  # Keep the default isolated from older API-31 caches (see env.sh).
+  # The supported API-30 branch uses this base unless the caller sets BUILD_BASE.
+  set(BUILD_BASE "${CMAKE_SOURCE_DIR}/../blender_build_android_api30")
 endif()
 if(NOT DEFINED LIBDIR)
   # Harvested deps, matching the deps builder's default.

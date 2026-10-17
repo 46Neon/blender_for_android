@@ -33,7 +33,8 @@ EXT_DIR="/sdcard/Android/data/$PKG/files"
 ARGS_FILE="$EXT_DIR/blender_args.txt"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-BUILD_BASE="${BUILD_BASE:-/root/blender_android_deps}"
+ANDROID_API="${ANDROID_API:-30}"
+BUILD_BASE="${BUILD_BASE:-$(cd "$REPO_ROOT/.." && pwd)/blender_build_android_api${ANDROID_API}}"
 
 die() {
   echo "debug.sh: $*" >&2

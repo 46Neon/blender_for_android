@@ -34,14 +34,26 @@ case "$(uname -s)" in
 esac
 export JAVA_HOME="${JAVA_HOME:-$JAVA_HOME_DEFAULT}"
 
-# --- Target: Samsung Galaxy Tab S8 FE ---------------------------------------
-# SoC: Exynos 1380 (arm64). Vulkan 1.1+. Ships Android 12, updatable to 14/15.
+# --- Target: Android 11+ arm64 ----------------------------------------------
+# Android 11 is API 30. Keep the native minimum, Java DEX minimum, and APK
+# manifest minimum aligned through this one setting.
 export ANDROID_ABI="${ANDROID_ABI:-arm64-v8a}"
-# Minimum API we build against. 31 (Android 12) is both target devices' launch
-# API and provides bionic funcs (timespec_get@29 etc.) Blender core expects.
-export ANDROID_API="${ANDROID_API:-31}"
-# API we compile/target the app against (manifest targetSdkVersion). Android 14.
+export ANDROID_API="${ANDROID_API:-30}"
+if ! [[ "$ANDROID_API" =~ ^[0-9]+$ ]] || (( ANDROID_API < 30 )); then
+  echo "[blender-android] ERROR: ANDROID_API must be 30 or newer (got: $ANDROID_API)" >&2
+  if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 1
+  else
+    exit 1
+  fi
+fi
+# Compile SDK (35) and target SDK (34) are independent of the native minimum.
+# A higher targetSdk does not make an API-30 installation require Android 14.
 export ANDROID_TARGET_API="${ANDROID_TARGET_API:-34}"
+# Keep API-specific dependency prefixes and CMake caches separate by default;
+# API-31 objects are not safe to reuse for an API-30 link. BUILD_BASE can still
+# be explicitly overridden by the caller.
+export ANDROID_BUILD_BASE_DEFAULT="${ANDROID_BUILD_BASE_DEFAULT:-$(cd "$ANDROID_REPO_ROOT/.." && pwd)/blender_build_android_api${ANDROID_API}}"
 
 # --- Derived ----------------------------------------------------------------
 export ANDROID_TOOLCHAIN_FILE="$ANDROID_NDK_ROOT/build/cmake/android.toolchain.cmake"

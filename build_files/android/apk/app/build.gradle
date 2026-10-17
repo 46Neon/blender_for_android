@@ -9,11 +9,12 @@ plugins {
   id 'com.android.application'
 }
 
-// Under the build base: <repo>/../blender_build_android/android_apk_stage_<cfg>.
+// Under the API-specific build base; can be overridden with -PandroidBuildBase=... .
 // Pick the config with -PblenderConfig=lite|full (default full); must be staged
 // by package.sh first.
 def blenderConfig = project.findProperty('blenderConfig') ?: 'full'
-def stageDir = "${rootDir}/../../../../blender_build_android/android_apk_stage_${blenderConfig}"
+def androidBuildBase = project.findProperty('androidBuildBase') ?: "${rootDir}/../../../../blender_build_android_api30"
+def stageDir = "${androidBuildBase}/android_apk_stage_${blenderConfig}"
 
 android {
   namespace 'org.blender.blender'
@@ -22,7 +23,7 @@ android {
 
   defaultConfig {
     applicationId 'org.blender.blender'
-    minSdk 31
+    minSdk 30
     targetSdk 34
     versionCode 1
     versionName '5.3-android'

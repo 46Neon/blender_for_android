@@ -108,7 +108,7 @@ CONFIG REQUIRED)` instead and feeds the imported target into the
 
 `core/thread.cpp` takes the `__linux__` branch on Android and calls
 `pthread_getaffinity_np` / `pthread_setaffinity_np`, which bionic only exposes
-from API level 36 — we build against 31. `build_files/build_environment/patches/oidn_android.diff`
+from API level 36. The API-30 port still requires a fresh NDK link/build to verify this path. `build_files/build_environment/patches/oidn_android.diff`
 redirects both to `sched_getaffinity` / `sched_setaffinity` with pid `0`, which
 means "the calling thread" and has existed in every API level. `PinningObserver`
 runs `set()`/`restore()` on the very thread it is pinning, so the two are the
@@ -116,7 +116,7 @@ same operation.
 
 The shim is required regardless of how new the *device* is: the reference phone
 runs Android 16 (API 36) and would have the symbols at runtime, but the NDK
-stubs we link against are the API 31 set, so the link fails without it.
+stubs for the selected API level omit those functions, so the link fails without it (including API 30).
 
 If pinning ever misbehaves on a big.LITTLE scheduler, `OIDN_SET_AFFINITY=0` in
 the environment disables it without a rebuild.

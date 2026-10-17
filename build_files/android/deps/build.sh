@@ -83,7 +83,7 @@ source "$REPO_ROOT/build_files/android/env.sh"
 # CMake caches, where the same directory then appears under two spellings and is
 # treated as two. The same slip made the APK scripts wipe their build directory
 # on every run.
-BUILD_BASE="${BUILD_BASE:-$(cd "$REPO_ROOT/.." && pwd)/blender_build_android}"
+BUILD_BASE="${BUILD_BASE:-$ANDROID_BUILD_BASE_DEFAULT}"
 : "${LIBDIR:=$BUILD_BASE/lib/android_$( [ "$ANDROID_ABI" = arm64-v8a ] && echo arm64 || echo "$ANDROID_ABI")}"
 DL_DIR="$BUILD_BASE/android_deps_build/downloads"
 WORK_DIR="$BUILD_BASE/android_deps_build/work"
@@ -93,7 +93,31 @@ HOST_TOOLS_DIR="$BUILD_BASE/android_deps_build/host"
 VERSIONS="$REPO_ROOT/build_files/build_environment/cmake/versions.cmake"
 mkdir -p "$LIBDIR" "$DL_DIR" "$WORK_DIR" "$HOST_TOOLS_DIR"
 
-echo "[deps] LIBDIR=$LIBDIR"
+# A harvested prefix is not API-neutral: native dependencies may reference
+# symbols introduced after the minimum OS API. Fail closed for old/unmarked
+# prefixes instead of treating their files as API-30 output. Use a new BUILD_BASE
+# (the default is API-specific) and never delete the existing prefix here.
+CONFIG_STAMP="$LIBDIR/.android-build-config"
+EXPECTED_CONFIG="abi=$ANDROID_ABI
+api=$ANDROID_API
+ndk=$ANDROID_NDK_VERSION"
+if [ -f "$CONFIG_STAMP" ]; then
+  ACTUAL_CONFIG="$(cat "$CONFIG_STAMP")"
+  if [ "$ACTUAL_CONFIG" != "$EXPECTED_CONFIG" ]; then
+    echo "[deps] ERROR: dependency prefix config mismatch at $LIBDIR" >&2
+    printf '[deps] found:\n%s\n[deps] required:\n%s\n' "$ACTUAL_CONFIG" "$EXPECTED_CONFIG" >&2
+    echo "[deps] choose a separate BUILD_BASE; this script will not delete or overwrite the old prefix" >&2
+    exit 1
+  fi
+elif find "$LIBDIR" -mindepth 1 -maxdepth 1 ! -name "$(basename "$CONFIG_STAMP")" -print -quit | grep -q .; then
+  echo "[deps] ERROR: existing unmarked dependency prefix at $LIBDIR; API level cannot be verified" >&2
+  echo "[deps] choose a new API-specific BUILD_BASE or manually verify/rebuild the prefix; nothing was deleted" >&2
+  exit 1
+else
+  printf '%s\n' "$EXPECTED_CONFIG" > "$CONFIG_STAMP"
+fi
+
+echo "[deps] LIBDIR=$LIBDIR (ABI=$ANDROID_ABI API=$ANDROID_API NDK=$ANDROID_NDK_VERSION)"
 
 # Read a `set(NAME value)` entry from versions.cmake.
 dep_version() {
@@ -956,7 +980,8 @@ SITECUSTOMIZE
 # architecture-specific about the copy.
 #
 # What this does *not* change: the wheels PyPI can offer. The target reports
-# `android-31-arm64_v8a`, a platform tag almost nothing publishes for, and
+# an API-specific Android arm64 platform tag (for this build,
+# `android-30-arm64_v8a`), which few projects publish, and
 # there is no compiler on the device to fall back on. Pure-Python packages
 # install; anything with a C extension has to be cross-compiled here the way
 # numpy was.

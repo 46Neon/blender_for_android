@@ -71,7 +71,7 @@
                  pathSuffix rather than the usual pathPattern=".*\\.blend": Android's
                  PatternMatcher implements ".*" without backtracking, so the greedy
                  run swallows the extension and the match fails on any path with a dot
-                 in it. pathSuffix arrived in API 29 and minSdk here is 31.
+                 in it. pathSuffix arrived in API 29; minSdk 30 (Android 11) supports it.
 
                  host="*" is what makes the suffix count, and it is not optional.
                  IntentFilter.matchData only reaches the path patterns inside the

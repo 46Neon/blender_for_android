@@ -36,16 +36,16 @@ DEPS_MARKER = Path("lib") / "android_arm64"
 # Where the shell scripts look when BUILD_BASE is unset. Each of them computes this
 # fallback on its own, so if this process guesses differently the two halves build
 # against different trees.
-DEFAULT_BUILD_BASE = REPO_ROOT.parent / "blender_build_android"
+ANDROID_API = os.environ.get("ANDROID_API", "30")
+DEFAULT_BUILD_BASE = REPO_ROOT.parent / f"blender_build_android_api{ANDROID_API}"
 
-# Checked in order when BUILD_BASE is unset, first one holding the dependency prefix
-# wins. Guessing wrong used to surface two minutes later as a cmake error about a
-# missing LIBDIR, with the build already half-configured.
+# The API-specific default is the only automatic candidate. Guessing an
+# unversioned tree can silently reuse dependencies built for a different API.
 BUILD_BASE_CANDIDATES = (
     DEFAULT_BUILD_BASE,
-    REPO_ROOT.parent / "blender_android_deps",
-    Path.home() / "blender_android_deps",
 )
+# Intentionally do not auto-detect legacy, unversioned dependency trees: their
+# NDK API level is unknown and reusing API-31 libraries can break API-30 loads.
 
 
 def resolve_build_base(explicit: str | None = None) -> Path:

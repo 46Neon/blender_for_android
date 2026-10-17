@@ -20,7 +20,7 @@ cd "$REPO_ROOT"
 
 # Canonical path: CMake records a resolved one, and comparing an unresolved
 # path against it made drop_stale_cache wipe the build dir on every run.
-BUILD_BASE="${BUILD_BASE:-$(cd "$REPO_ROOT/.." && pwd)/blender_build_android}"
+BUILD_BASE="${BUILD_BASE:-$ANDROID_BUILD_BASE_DEFAULT}"
 BUILD="$BUILD_BASE/build_android_$CONFIG"
 # Flavours share a build tree but have their own stage and output name, exactly as
 # package.sh lays them out. Without this the swap targets a stage that a flavoured
@@ -58,7 +58,7 @@ if [ "$JAVA_SRC" -nt "$STAGE/dex/classes.dex" ]; then
   "${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk-amd64}/bin/javac" \
     -classpath "$ANDROID_HOME/platforms/android-35/android.jar" -source 17 -target 17 \
     -d "$STAGE/javac" "$JAVA_SRC"
-  "$BT/d8" --min-api "${ANDROID_API:-31}" --output "$STAGE/dex" \
+  "$BT/d8" --min-api "${ANDROID_API:-30}" --output "$STAGE/dex" \
     $(find "$STAGE/javac" -name '*.class')
 fi
 

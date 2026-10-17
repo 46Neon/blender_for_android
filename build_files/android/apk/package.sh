@@ -17,7 +17,7 @@ source "$REPO_ROOT/build_files/android/env.sh"
 CONFIG="${BLENDER_ANDROID_CONFIG:-full}"
 # Canonical path: CMake records a resolved one, and comparing an unresolved
 # path against it made drop_stale_cache wipe the build dir on every run.
-BUILD_BASE="${BUILD_BASE:-$(cd "$REPO_ROOT/.." && pwd)/blender_build_android}"
+BUILD_BASE="${BUILD_BASE:-$ANDROID_BUILD_BASE_DEFAULT}"
 : "${LIBDIR:=$BUILD_BASE/lib/android_arm64}"
 BUILD="${BUILD:-$BUILD_BASE/build_android_$CONFIG}"
 BT="$ANDROID_HOME/build-tools/35.0.1"
