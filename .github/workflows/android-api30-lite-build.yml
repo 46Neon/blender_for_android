@@ -77,11 +77,14 @@ jobs:
           curl --silent --output "$RUNNER_TEMP/blender-splash.png" 'https://media.githubusercontent.com/media/46Neon/blender_for_android/82ff5e77e2442921045df9a52ae9f41dd3d8f7b1/release/datafiles/splash.png'
           printf '%s  %s\n' "$MISSING_LFS_OID" "$RUNNER_TEMP/blender-splash.png" | sha256sum --check
           install -D -m 644 "$RUNNER_TEMP/blender-splash.png" release/datafiles/splash.png
-          git -c submodule.lib/linux_x64.update=checkout submodule update --init lib/linux_x64
+          mkdir -p lib
+          git clone --depth 1 --single-branch --branch blender-v5.3-release \
+            'https://projects.blender.org/blender/lib-linux_x64.git' lib/linux_x64
+          git -C lib/linux_x64 lfs install --local
           git -C lib/linux_x64 config lfs.url 'https://projects.blender.org/blender/lib-linux_x64.git/info/lfs'
           GIT_TERMINAL_PROMPT=0 git -C lib/linux_x64 lfs pull
           test -d lib/linux_x64/tbb/lib
-          git submodule status lib/linux_x64
+          git -C lib/linux_x64 rev-parse --short HEAD
           df -h . "$RUNNER_TEMP"
 
       - name: Build the API-30 lite dependency closure from a clean prefix
