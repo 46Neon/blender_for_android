@@ -48,11 +48,18 @@ jobs:
           "$ANDROID_LLVM_BIN/llvm-readelf" -h "$LIB" | grep -F 'AArch64'
           "$ANDROID_LLVM_BIN/llvm-readelf" -d "$LIB" | grep -E 'lib(android|log)\.so'
 
+      - name: Install the Gradle version declared by the project
+        run: |
+          DIST='https://services.gradle.org/distributions/gradle-8.9-bin.zip'
+          curl --fail --location "$DIST" --output "$RUNNER_TEMP/gradle-8.9-bin.zip"
+          unzip -q "$RUNNER_TEMP/gradle-8.9-bin.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.9/bin" >> "$GITHUB_PATH"
+
       - name: Build Gradle APK and check API metadata
         shell: bash
         working-directory: build_files/android/apk
         run: |
-          bash ./gradlew --no-daemon :app:assembleDebug
+          gradle --no-daemon :app:assembleDebug
           APK='app/build/outputs/apk/debug/app-debug.apk'
           "$ANDROID_HOME/build-tools/35.0.1/aapt" dump badging "$APK" | tee /tmp/apk-badging.txt
           grep -F "sdkVersion:'30'" /tmp/apk-badging.txt
