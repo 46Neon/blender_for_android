@@ -137,7 +137,8 @@ jobs:
           LIBDIR="$RUNNER_TEMP/blender_build_android_api30_zlib/lib/android_arm64"
           OIDN="$LIBDIR/openimagedenoise/lib/libOpenImageDenoise_core.a"
           test -s "$OIDN"
-          "$ANDROID_LLVM_BIN/llvm-objdump" -f "$OIDN" | grep -qi aarch64
+          # Avoid grep -q with pipefail: it can SIGPIPE llvm-objdump on large archives.
+          "$ANDROID_LLVM_BIN/llvm-objdump" -f "$OIDN" | grep -i aarch64 >/dev/null
           if "$ANDROID_LLVM_BIN/llvm-nm" -u "$LIBDIR"/openimagedenoise/lib/*.a | grep -E 'pthread_(get|set)affinity_np'; then
             echo 'OIDN archive still references API-36 pthread affinity symbols' >&2
             exit 1
