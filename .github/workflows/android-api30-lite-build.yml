@@ -139,6 +139,12 @@ jobs:
           for LIB in "${LIBS[@]}"; do
             "$ANDROID_LLVM_BIN/llvm-readelf" -h "$LIB" | grep -E 'Machine:.*AArch64' >/dev/null
           done
+          "$ANDROID_HOME/build-tools/35.0.1/zipalign" -c -v 4 "$APK"
+          "$ANDROID_HOME/build-tools/35.0.1/apksigner" verify --verbose --print-certs "$APK"
+          APK_SHA256="$(sha256sum "$APK" | awk '{print $1}')"
+          printf '%s  blender-lite.apk\n' "$APK_SHA256" > "$BUILD_BASE/android_apk_stage_lite/blender-lite.apk.sha256"
+          stat -c 'APK size: %s bytes' "$APK"
+          echo "APK SHA-256: $APK_SHA256"
           echo "Verified ${#LIBS[@]} arm64 native libraries in $APK"
           du -h "$APK" "$RUNNER_TEMP/api30-lite-apk/lib/arm64-v8a/libblender.so"
 
@@ -146,7 +152,27 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: blender-lite-api30-arm64
-          path: ${{ env.BUILD_BASE }}/android_apk_stage_lite/blender-lite.apk
+          path: |
+            ${{ env.BUILD_BASE }}/android_apk_stage_lite/blender-lite.apk
+            ${{ env.BUILD_BASE }}/android_apk_stage_lite/blender-lite.apk.sha256
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+
+      - name: Download uploaded APK for round-trip validation
+        uses: actions/download-artifact@v4
+        with:
+          name: blender-lite-api30-arm64
+          path: ${{ runner.temp }}/api30-artifact-roundtrip
+
+      - name: Validate downloaded APK integrity and signature
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK="$RUNNER_TEMP/api30-artifact-roundtrip/blender-lite.apk"
+          test -s "$APK"
+          (cd "$RUNNER_TEMP/api30-artifact-roundtrip" && sha256sum --check blender-lite.apk.sha256)
+          cmp "$BUILD_BASE/android_apk_stage_lite/blender-lite.apk" "$APK"
+          "$ANDROID_HOME/build-tools/35.0.1/apksigner" verify --verbose "$APK"
+          "$ANDROID_HOME/build-tools/35.0.1/aapt" dump badging "$APK" | grep -F "sdkVersion:'30'"
+          stat -c 'Round-trip APK size: %s bytes' "$APK"
